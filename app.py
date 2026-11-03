@@ -330,45 +330,226 @@ elif menu == "📄 미팅 업무":
 # 일정 및 업무
 else:
     st.subheader("📅 일정 및 업무")
+
     tasks = list_tasks()
     unfinished = sum(not row[6] for row in tasks)
-    done = len(tasks)-unfinished
-    c1,c2,c3 = st.columns(3)
-    c1.metric("전체 업무",len(tasks))
-    c2.metric("미완료",unfinished)
-    c3.metric("완료",done)
+    done = len(tasks) - unfinished
 
-    events = [{"title":row[1],"start":row[3],"allDay":True,
-               "color":"#B8A4C9" if row[6] else "#9065B6"}
-              for row in tasks if row[3]]
-    calendar(events=events,options={"initialView":"dayGridMonth",
-        "locale":"ko","height":560,
-        "headerToolbar":{"left":"prev,next today","center":"title",
-                         "right":"dayGridMonth,timeGridWeek,listMonth"}},
-        key="aivle_calendar")
-    st.caption("날짜가 확정되지 않은 업무는 캘린더가 아닌 아래 목록에 표시돼요.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("전체 업무", len(tasks))
+    c2.metric("미완료", unfinished)
+    c3.metric("완료", done)
+
+    # 캘린더 일정별 색상
+    events = [{
+        "title": row[1],
+        "start": row[3],
+        "allDay": True,
+        "backgroundColor": (
+            "#D8CEDF" if row[6]
+            else "#B49AD3" if row[5] == "일정"
+            else "#E4B7CC"
+        ),
+        "borderColor": (
+            "#D8CEDF" if row[6]
+            else "#B49AD3" if row[5] == "일정"
+            else "#E4B7CC"
+        ),
+        "textColor": "#5C5265" if row[6] else "#44344F"
+    } for row in tasks if row[3]]
+
+    # 캘린더 디자인
+    calendar_css = """
+    .fc {
+        font-family: inherit;
+        color: #55475F;
+    }
+
+    .fc .fc-toolbar-title {
+        color: #78549D;
+        font-size: 1.35rem;
+        font-weight: 750;
+    }
+
+    .fc .fc-button-primary {
+        background: #A781C7 !important;
+        border-color: #A781C7 !important;
+        color: white !important;
+        border-radius: 9px !important;
+        box-shadow: none !important;
+    }
+
+    .fc .fc-button-primary:hover {
+        background: #9068B4 !important;
+        border-color: #9068B4 !important;
+    }
+
+    .fc .fc-button-primary:not(:disabled).fc-button-active,
+    .fc .fc-button-primary:not(:disabled):active {
+        background: #79549D !important;
+        border-color: #79549D !important;
+    }
+
+    .fc .fc-col-header-cell {
+        background: #F5ECFA;
+        border-color: #E8DCEE;
+    }
+
+    .fc .fc-col-header-cell-cushion {
+        color: #78549D;
+        font-weight: 650;
+        padding: 10px 0;
+    }
+
+    .fc .fc-daygrid-day {
+        background: #FFFCFF;
+        border-color: #EDE4F0;
+    }
+
+    .fc .fc-daygrid-day:hover {
+        background: #FBF5FF;
+    }
+
+    .fc .fc-day-today {
+        background: #F0E3FA !important;
+    }
+
+    .fc .fc-day-today .fc-daygrid-day-number {
+        background: #9D78BE;
+        color: white !important;
+        border-radius: 50%;
+        width: 27px;
+        height: 27px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 3px;
+    }
+
+    .fc .fc-daygrid-day-number {
+        color: #655870;
+        text-decoration: none;
+    }
+
+    .fc .fc-day-sun .fc-daygrid-day-number {
+        color: #C77999;
+    }
+
+    .fc .fc-day-sat .fc-daygrid-day-number {
+        color: #7B8DC4;
+    }
+
+    .fc .fc-event {
+        border-radius: 7px;
+        padding: 2px 5px;
+        font-weight: 600;
+    }
+
+    .fc .fc-list-day-cushion {
+        background: #F5ECFA !important;
+    }
+
+    .fc .fc-list-event:hover td {
+        background: #FBF5FF !important;
+    }
+
+    .fc .fc-scrollgrid,
+    .fc td,
+    .fc th {
+        border-color: #EDE4F0 !important;
+    }
+    """
+
+    # 캘린더 출력
+    calendar(
+        events=events,
+        options={
+            "initialView": "dayGridMonth",
+            "locale": "ko",
+            "height": 560,
+            "dayMaxEvents": 3,
+            "buttonText": {
+                "today": "오늘",
+                "month": "월",
+                "week": "주",
+                "list": "목록"
+            },
+            "headerToolbar": {
+                "left": "prev,next today",
+                "center": "title",
+                "right": "dayGridMonth,timeGridWeek,listMonth"
+            }
+        },
+        custom_css=calendar_css,
+        key="aivle_calendar"
+    )
+
+    # 일정 색상 안내
+    st.caption("🟣 일정  ·  🌸 할 일  ·  ⚪ 완료")
+
+    st.caption(
+        "날짜가 확정되지 않은 업무는 캘린더가 아닌 아래 목록에 표시돼요."
+    )
+
+    # To-Do List
     st.markdown("**📋 To-Do List**")
-    status_filter = st.radio("표시",["전체","미완료","완료"],horizontal=True)
-    shown = [row for row in tasks if status_filter=="전체" or
-             (status_filter=="완료" and row[6]) or
-             (status_filter=="미완료" and not row[6])]
+
+    status_filter = st.radio(
+        "표시",
+        ["전체", "미완료", "완료"],
+        horizontal=True
+    )
+
+    shown = [
+        row for row in tasks
+        if status_filter == "전체"
+        or (status_filter == "완료" and row[6])
+        or (status_filter == "미완료" and not row[6])
+    ]
+
     if not shown:
         st.info("표시할 업무가 없어요. 미팅 업무에서 회의록을 분석해 보세요.")
-    for task_id,title,owner,due,description,kind,is_done in shown:
-        checked = st.checkbox(f"{title} · {owner} · {due or '기한 미정'}",
-                              value=bool(is_done),key=f"todo_{task_id}")
+
+    # 업무 완료·미완료 체크
+    for task_id, title, owner, due, description, kind, is_done in shown:
+        checked = st.checkbox(
+            f"{title} · {owner} · {due or '기한 미정'}",
+            value=bool(is_done),
+            key=f"todo_{task_id}"
+        )
+
         if checked != bool(is_done):
             with db_connect() as conn:
-                conn.execute("UPDATE tasks SET done=? WHERE id=?",(int(checked),task_id))
+                conn.execute(
+                    "UPDATE tasks SET done=? WHERE id=?",
+                    (int(checked), task_id)
+                )
                 conn.commit()
             st.rerun()
+
         if description:
             st.caption(f"{kind} · {description}")
+
+    # 업무 목록 CSV 저장
     if tasks:
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["업무","담당자","기한","설명","유형","완료"])
+
+        writer.writerow(["업무", "담당자", "기한", "설명", "유형", "완료"])
+
         for row in tasks:
-            writer.writerow([row[1],row[2],row[3] or "",row[4],row[5],"완료" if row[6] else "미완료"])
-        st.download_button("업무 목록 CSV 저장",output.getvalue().encode("utf-8-sig"),
-                           file_name="aivle_tasks.csv",mime="text/csv")
+            writer.writerow([
+                row[1],
+                row[2],
+                row[3] or "",
+                row[4],
+                row[5],
+                "완료" if row[6] else "미완료"
+            ])
+
+        st.download_button(
+            "업무 목록 CSV 저장",
+            output.getvalue().encode("utf-8-sig"),
+            file_name="aivle_tasks.csv",
+            mime="text/csv"
+        )
