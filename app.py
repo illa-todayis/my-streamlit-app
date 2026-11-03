@@ -498,8 +498,16 @@ else:
         custom_css=calendar_css,
         key="aivle_calendar"
     )
-    # 일정 색상 안내
-    st.caption("🟣 일정  ·  🌸 할 일  ·  ⚪ 완료")
+    
+    # 캘린더 색상 안내
+    st.markdown("""
+    <div style="display:flex; gap:20px; align-items:center;
+                margin:12px 0; font-size:14px; color:#756C7C;">
+        <span>🟣 일정</span>
+        <span>🌸 할 일</span>
+        <span>⚪ 완료</span>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.caption(
         "날짜가 확정되지 않은 업무는 캘린더가 아닌 아래 목록에 표시돼요."
