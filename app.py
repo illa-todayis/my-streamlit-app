@@ -31,10 +31,10 @@ sys_role = """
 st.subheader("🎙️ 음성으로 미팅 내용 요약")
 
 # 미팅 파일 업로드
-uploaded_file = st.file_uploader("미팅 파일을 업로드하세요", type=["txt"])
+uploaded_file = st.file_uploader("미팅 파일을 업로드하세요.", type=["txt"])
 
 # 음성 파일 업로드
-audio_file = st.file_uploader("음성 파일을 업로드하세요", type=["m4a", "mp3", "wav"])
+audio_file = st.file_uploader("음성 파일을 업로드하세요.", type=["m4a", "mp3", "wav"])
 
 if uploaded_file is not None and audio_file is not None:
 
@@ -71,3 +71,17 @@ if uploaded_file is not None and audio_file is not None:
 
     # 응답 확인
     st.write(response.output_text)
+
+# 텍스트를 음성으로 변환 → speech_response
+with st.spinner("음성 생성 중입니다..."):
+    speech_response = client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="nova",
+        input=response.output_text
+    )
+
+# 음성 출력
+audio_bytes = speech_response.content
+
+# 음성 듣기
+st.audio(audio_bytes, format="audio/mp3")
