@@ -71,3 +71,19 @@ if uploaded_file is not None and audio_file is not None:
 
     # 응답 확인
     st.write(response.output_text)
+
+if "response" in locals(): # 미션 4의 LLM 응답이 생성된 경우에만 음성 변환 실행
+
+    # 텍스트를 음성으로 변환 → speech_response
+    with st.spinner("음성 생성 중입니다..."):
+        speech_response = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="nova",
+            input=response.output_text
+        )
+
+    # 음성 출력
+    audio_bytes = speech_response.content
+
+    # 음성 듣기
+    st.audio(audio_bytes, format="audio/mp3")
