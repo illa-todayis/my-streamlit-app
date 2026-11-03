@@ -27,18 +27,33 @@ sys_role = """
 - 미팅 내용에 없는 정보는 임의로 추가하지 않습니다.
 """
 
-st.subheader("📄 미팅 내용 요약")
+# 페이지 설정
+st.subheader("🎙️ 음성으로 미팅 내용 요약")
 
-# 미팅 내용 읽어오기 → meeting_text
+# 미팅 파일 업로드
 uploaded_file = st.file_uploader("미팅 파일을 업로드하세요", type=["txt"])
 
-if uploaded_file is not None:
+# 음성 파일 업로드
+audio_file = st.file_uploader("음성 파일을 업로드하세요", type=["m4a", "mp3", "wav"])
+
+if uploaded_file is not None and audio_file is not None:
+
+    # 미팅 내용 읽어오기 → meeting_text
     meeting_text = uploaded_file.read().decode("utf-8")
+
+    # 음성 메시지 확인(STT) → transcript
+    with st.spinner("음성 인식 중입니다..."):
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file
+        )
+
+    # 추출된 텍스트 확인
+    st.write(transcript.text)
 
     # 프롬프트 구성
     prompt = f"""
-에이블, 김 대리입니다.
-다음 미팅 내용을 분석하고 보고해 주세요.
+{transcript.text}
 
 [미팅 내용]
 {meeting_text}
@@ -56,4 +71,3 @@ if uploaded_file is not None:
 
     # 응답 확인
     st.write(response.output_text)
-
