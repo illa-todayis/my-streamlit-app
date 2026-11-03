@@ -3,6 +3,9 @@ import os
 import streamlit as st
 from openai import OpenAI
 
+# OpenAI 클라이언트 생성
+client = OpenAI()
+
 # 역할 부여
 sys_role = """
 당신은 김대리의 개인 비서 '에이블'입니다.
