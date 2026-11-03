@@ -28,7 +28,7 @@ sys_role = """
 """
 
 # 페이지 설정
-st.subheader("🎙️ 음성으로 미팅 내용 요약")
+st.subheader("🎙️ 음성 질문과 음성 응답")
 
 # 미팅 파일 업로드
 uploaded_file = st.file_uploader("미팅 파일을 업로드하세요.", type=["txt"])
@@ -68,11 +68,6 @@ if uploaded_file is not None and audio_file is not None:
                 {"role": "user", "content": prompt}
             ]
         )
-
-    # 응답 확인
-    st.write(response.output_text)
-
-if "response" in locals(): # 미션 4의 LLM 응답이 생성된 경우에만 음성 변환 실행
 
     # 텍스트를 음성으로 변환 → speech_response
     with st.spinner("음성 생성 중입니다..."):
