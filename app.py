@@ -32,10 +32,8 @@ if uploaded_file is not None:
 {meeting_text}
 """
 
-    # 요약 버튼
-    if st.button("미팅 요약하기"):
-
-        # LLM 호출
+    # LLM 호출
+    with st.spinner("요약 중입니다..."):
         response = client.responses.create(
             model="gpt-4o-mini",
             input=[
@@ -44,5 +42,6 @@ if uploaded_file is not None:
             ]
         )
 
-        # 응답 확인
-        st.write(response.output_text)
+    # 응답 확인
+    st.write(response.output_text)
+
