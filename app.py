@@ -8,6 +8,7 @@ import smtplib
 import sqlite3
 from datetime import date
 from email.mime.text import MIMEText
+from streamlit_calendar import calendar
 
 import streamlit as st
 from openai import OpenAI
