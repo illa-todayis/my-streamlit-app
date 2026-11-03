@@ -6,35 +6,46 @@ from openai import OpenAI
 # OpenAI 클라이언트 생성
 client = OpenAI()
 
-# 페이지 설정
-st.set_page_config(page_title="비서 에이블", page_icon="🪄")
-
-# 제목
-st.title("비서 에이블🪄")
-st.write("안녕하세요! 업무를 도와드리는 AI 개인비서 에이블입니다.")
-
 # 역할 부여
 sys_role = """
-당신은 KT AIVLE SCHOOL 출신이며 탁월한 데이터 분석 및 AI 개발 능력을 보유하고 있으며
-마케팅팀에서 근무하고 있는 김대리의 음성인식 AI 개인비서입니다.
-업무 요청 시 '에이블'이라는 호칭으로 불립니다.
-당신이 해야하는 일은 회의록 분석, 업무 지시추출, 다양한 질문에 대한 응답, 음성 인터페이스, 이메일 전송기능이 있습니다.
-이를 도와주는 업무를 하며 친절한 AI비서입니다.
+당신은 김대리의 개인 비서 '에이블'입니다.
+김대리가 요청한 업무를 최선을 다해 처리합니다.
+미팅 내용을 정확하게 분석하고 다음 순서에 따라 보고합니다.
+
+1. 김 대리의 담당 업무
+- 김 대리에게 배정된 업무를 가장 먼저 보고합니다.
+- 업무별 수행 내용과 세부 지시사항을 자세히 정리합니다.
+- 업무 기한이나 추가 요청사항이 있다면 함께 알려줍니다.
+
+2. 미팅 내용 요약
+- 미팅의 주요 안건과 핵심 논의 내용을 요약합니다.
+- 주요 결정사항과 향후 진행 계획을 정리합니다.
+
+[작성 규칙]
+- 반드시 김 대리의 담당 업무를 먼저 작성한 후 미팅 내용을 요약합니다.
+- 항목별 제목을 구분하여 가독성 있게 작성합니다.
+- 미팅 내용에 없는 정보는 임의로 추가하지 않습니다.
 """
 
-# 프롬프트
-prompt = st.text_input(
-    "질문",
-    placeholder="질문을 입력하세요.",
-    label_visibility="collapsed" #입력창 위의 라벨을 숨기고 빈 공간도 제거
-)
+st.subheader("📄 미팅 내용 요약")
 
-# 질문 버튼
-if st.button("✉️"):
-    if prompt.strip() == "":
-        st.warning("질문을 입력하세요.")
-    else:
-        # LLM 호출
+# 미팅 내용 읽어오기 → meeting_text
+uploaded_file = st.file_uploader("미팅 파일을 업로드하세요", type=["txt"])
+
+if uploaded_file is not None:
+    meeting_text = uploaded_file.read().decode("utf-8")
+
+    # 프롬프트 구성
+    prompt = f"""
+에이블, 김 대리입니다.
+다음 미팅 내용을 분석하고 보고해 주세요.
+
+[미팅 내용]
+{meeting_text}
+"""
+
+    # LLM 호출
+    with st.spinner("요약 중입니다..."):
         response = client.responses.create(
             model="gpt-4o-mini",
             input=[
@@ -43,5 +54,6 @@ if st.button("✉️"):
             ]
         )
 
-        # 응답 확인
-        st.write(response.output_text)
+    # 응답 확인
+    st.write(response.output_text)
+
