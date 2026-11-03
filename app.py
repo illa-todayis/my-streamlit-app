@@ -23,7 +23,11 @@ sys_role = """
 """
 
 # 프롬프트
-prompt = st.text_input("질문을 입력하세요: ")
+prompt = st.text_input(
+    "질문",
+    placeholder="질문을 입력하세요",
+    label_visibility="collapsed"
+)
 
 # 질문 버튼
 if st.button("✉️"):
