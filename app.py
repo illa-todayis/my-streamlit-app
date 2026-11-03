@@ -10,7 +10,7 @@ client = OpenAI()
 st.set_page_config(page_title="비서 에이블", page_icon="🪄")
 
 # 제목
-st.title("비서 에이블")
+st.title("비서 에이블🪄")
 st.write("안녕하세요! 업무를 도와드리는 AI 개인비서 에이블입니다.")
 
 # 역할 부여
@@ -26,7 +26,7 @@ sys_role = """
 prompt = st.text_input("질문을 입력하세요: ")
 
 # 질문 버튼
-if st.button("질문하기"):
+if st.button("✉️"):
     if prompt.strip() == "":
         st.warning("질문을 입력하세요.")
     else:
