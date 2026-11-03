@@ -8,77 +8,74 @@ client = OpenAI()
 
 # 역할 부여
 sys_role = """
-당신은 김대리의 개인 비서 '에이블'입니다.
+당신은 '김 대리'의 개인 비서 '에이블'입니다.
 김대리가 요청한 업무를 최선을 다해 처리합니다.
-미팅 내용을 정확하게 분석하고 다음 순서에 따라 보고합니다.
-
-1. 김 대리의 담당 업무
-- 김 대리에게 배정된 업무를 가장 먼저 보고합니다.
-- 업무별 수행 내용과 세부 지시사항을 자세히 정리합니다.
-- 업무 기한이나 추가 요청사항이 있다면 함께 알려줍니다.
-
-2. 미팅 내용 요약
-- 미팅의 주요 안건과 핵심 논의 내용을 요약합니다.
-- 주요 결정사항과 향후 진행 계획을 정리합니다.
-
-[작성 규칙]
-- 반드시 김 대리의 담당 업무를 먼저 작성한 후 미팅 내용을 요약합니다.
-- 항목별 제목을 구분하여 가독성 있게 작성합니다.
-- 미팅 내용에 없는 정보는 임의로 추가하지 않습니다.
+미팅 내용을 정확하게 요약하고 담당 업무를 정리합니다.
+이메일 발송 요청이 있을 경우에만 send_email 도구를 사용합니다.
 """
 
-# 페이지 설정
-st.subheader("🎙️ 음성 질문과 음성 응답")
-
-# 미팅 파일 업로드
+# 미팅 내용 읽어오기 → meeting_text
 uploaded_file = st.file_uploader("미팅 파일을 업로드하세요.", type=["txt"])
 
-# 음성 파일 업로드
-audio_file = st.file_uploader("음성 파일을 업로드하세요.", type=["m4a", "mp3", "wav"])
-
-if uploaded_file is not None and audio_file is not None:
-
-    # 미팅 내용 읽어오기 → meeting_text
+if uploaded_file is not None:
     meeting_text = uploaded_file.read().decode("utf-8")
-
-    # 음성 메시지 확인(STT) → transcript
-    with st.spinner("음성 인식 중입니다..."):
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file
-        )
-
-    # 추출된 텍스트 확인
-    st.write(transcript.text)
 
     # 프롬프트 구성
     prompt = f"""
-{transcript.text}
+에이블, 김대리입니다.
+다음 미팅 내용을 요약해 이메일로 보내주세요.
+혹시 나에게 배정된 업무가 있으면 자세히 적어주세요.
+제 이메일 주소는 python2ran@gmail.com 입니다.
 
 [미팅 내용]
 {meeting_text}
 """
 
-    # LLM 호출
-    with st.spinner("요약 중입니다..."):
-        response = client.responses.create(
-            model="gpt-4o-mini",
-            input=[
-                {"role": "system", "content": sys_role},
-                {"role": "user", "content": prompt}
-            ]
-        )
+    if st.button("이메일 보내기"):
 
-    # 텍스트를 음성으로 변환 → speech_response
-    with st.spinner("음성 생성 중입니다..."):
-        speech_response = client.audio.speech.create(
-            model="gpt-4o-mini-tts",
-            voice="nova",
-            input=response.output_text
-        )
+        # LLM 호출
+        with st.spinner("이메일 발송을 처리 중입니다..."):
+            response = client.responses.create(
+                model="gpt-4o-mini",
+                input=[
+                    {"role": "system", "content": sys_role},
+                    {"role": "user", "content": prompt}
+                ],
+                tools=tools
+            )
 
-    # 음성 출력
-    audio_bytes = speech_response.content
+        # 도구 필요 여부 확인
+        tool_calls = [
+            item for item in response.output
+            if item.type == "function_call"
+        ]
 
-    # 음성 듣기
-    st.audio(audio_bytes, format="audio/mp3")
+        if not tool_calls:
+            # 도구가 필요 없으면 답변 출력
+            st.write(response.output_text)
+
+        else:
+            # 모델이 요청한 tool 실행
+            tool_outputs = []
+
+            for item in tool_calls:
+                if item.name == "send_email":
+                    args = json.loads(item.arguments)
+                    result = send_email(**args)
+
+                    tool_outputs.append({
+                        "type": "function_call_output",
+                        "call_id": item.call_id,
+                        "output": json.dumps(result, ensure_ascii=False)
+                    })
+
+            # tool 결과를 모델에 다시 전달
+            final_response = client.responses.create(
+                model="gpt-4o-mini",
+                previous_response_id=response.id,
+                input=tool_outputs
+            )
+
+            # 응답 확인
+            st.write(final_response.output_text)
+
