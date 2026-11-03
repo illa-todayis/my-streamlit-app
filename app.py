@@ -340,123 +340,137 @@ else:
     c2.metric("미완료", unfinished)
     c3.metric("완료", done)
 
-    # 캘린더 일정별 색상
+       # 캘린더 일정별 색상
     events = [{
         "title": row[1],
         "start": row[3],
         "allDay": True,
         "backgroundColor": (
-            "#D8CEDF" if row[6]
-            else "#B49AD3" if row[5] == "일정"
-            else "#E4B7CC"
+            "#E5E0E9" if row[6]
+            else "#BBA4D6" if row[5] == "일정"
+            else "#EBC3D4"
         ),
-        "borderColor": (
-            "#D8CEDF" if row[6]
-            else "#B49AD3" if row[5] == "일정"
-            else "#E4B7CC"
-        ),
-        "textColor": "#5C5265" if row[6] else "#44344F"
+        "borderColor": "transparent",
+        "textColor": "#54465E"
     } for row in tasks if row[3]]
 
     # 캘린더 디자인
     calendar_css = """
     .fc {
         font-family: inherit;
-        color: #55475F;
+        color: #51475A;
+        background: #FFFEFF;
+    }
+
+    .fc .fc-toolbar {
+        margin-bottom: 24px !important;
     }
 
     .fc .fc-toolbar-title {
-        color: #78549D;
-        font-size: 1.35rem;
-        font-weight: 750;
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: #6E5387;
     }
 
     .fc .fc-button-primary {
-        background: #A781C7 !important;
-        border-color: #A781C7 !important;
-        color: white !important;
+        background: #F4EFF8 !important;
+        border: 1px solid #E9E0F0 !important;
+        color: #765A90 !important;
         border-radius: 9px !important;
         box-shadow: none !important;
+        font-weight: 500;
     }
 
     .fc .fc-button-primary:hover {
-        background: #9068B4 !important;
-        border-color: #9068B4 !important;
+        background: #EAE0F3 !important;
     }
 
-    .fc .fc-button-primary:not(:disabled).fc-button-active,
-    .fc .fc-button-primary:not(:disabled):active {
-        background: #79549D !important;
-        border-color: #79549D !important;
+    .fc .fc-button-primary.fc-button-active {
+        background: #A98AC5 !important;
+        border-color: #A98AC5 !important;
+        color: white !important;
     }
 
     .fc .fc-col-header-cell {
-        background: #F5ECFA;
-        border-color: #E8DCEE;
+        background: #FBF8FD;
+        border: none !important;
+        border-bottom: 1px solid #F0EAF3 !important;
     }
 
     .fc .fc-col-header-cell-cushion {
-        color: #78549D;
-        font-weight: 650;
-        padding: 10px 0;
-    }
-
-    .fc .fc-daygrid-day {
-        background: #FFFCFF;
-        border-color: #EDE4F0;
-    }
-
-    .fc .fc-daygrid-day:hover {
-        background: #FBF5FF;
-    }
-
-    .fc .fc-day-today {
-        background: #F0E3FA !important;
-    }
-
-    .fc .fc-day-today .fc-daygrid-day-number {
-        background: #9D78BE;
-        color: white !important;
-        border-radius: 50%;
-        width: 27px;
-        height: 27px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 3px;
-    }
-
-    .fc .fc-daygrid-day-number {
-        color: #655870;
+        padding: 13px 0;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #85758F;
         text-decoration: none;
     }
 
+    .fc .fc-daygrid-day {
+        background: #FFFEFF;
+    }
+
+    .fc .fc-daygrid-day:hover {
+        background: #FBF8FD;
+    }
+
+    .fc .fc-day-today {
+        background: #FAF5FE !important;
+    }
+
+    .fc .fc-daygrid-day-number {
+        color: #63596D;
+        font-size: 0.9rem;
+        text-decoration: none;
+        padding: 7px 9px;
+        white-space: nowrap !important;
+    }
+
+    .fc .fc-day-today .fc-daygrid-day-number {
+        color: #78569A !important;
+        background: transparent !important;
+        border: 1px solid #BAA2D1;
+        border-radius: 8px;
+        width: auto !important;
+        height: auto !important;
+        margin: 4px;
+        padding: 3px 8px;
+        display: inline-block !important;
+        white-space: nowrap !important;
+        font-weight: 700;
+    }
+
     .fc .fc-day-sun .fc-daygrid-day-number {
-        color: #C77999;
+        color: #C78A9D;
     }
 
     .fc .fc-day-sat .fc-daygrid-day-number {
-        color: #7B8DC4;
+        color: #8899BF;
+    }
+
+    .fc .fc-daygrid-day-frame {
+        min-height: 82px !important;
     }
 
     .fc .fc-event {
-        border-radius: 7px;
-        padding: 2px 5px;
-        font-weight: 600;
+        border-radius: 6px;
+        padding: 3px 6px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        box-shadow: none;
     }
 
-    .fc .fc-list-day-cushion {
-        background: #F5ECFA !important;
-    }
-
-    .fc .fc-list-event:hover td {
-        background: #FBF5FF !important;
+    .fc .fc-daygrid-event-dot {
+        border-color: #BBA4D6;
     }
 
     .fc .fc-scrollgrid,
     .fc td,
     .fc th {
-        border-color: #EDE4F0 !important;
+        border-color: #F0ECF2 !important;
+    }
+
+    .fc .fc-list-day-cushion {
+        background: #F8F3FB !important;
     }
     """
 
@@ -466,8 +480,9 @@ else:
         options={
             "initialView": "dayGridMonth",
             "locale": "ko",
-            "height": 560,
-            "dayMaxEvents": 3,
+            "height": 500,
+            "dayMaxEvents": 2,
+            "fixedWeekCount": False,
             "buttonText": {
                 "today": "오늘",
                 "month": "월",
@@ -483,7 +498,6 @@ else:
         custom_css=calendar_css,
         key="aivle_calendar"
     )
-
     # 일정 색상 안내
     st.caption("🟣 일정  ·  🌸 할 일  ·  ⚪ 완료")
 
