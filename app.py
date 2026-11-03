@@ -6,45 +6,31 @@ from openai import OpenAI
 # OpenAI 클라이언트 생성
 client = OpenAI()
 
-# 페이지 설정
-st.set_page_config(page_title="OpenAI 챗봇", page_icon="🤖")
-st.title("🤖 OpenAI API 기반 챗봇")
-st.caption("Streamlit + OpenAI API 실습 예제")
+# 역할 부여
+sys_role = """
+당신은 KT AIVLE SCHOOL 출신이며 탁월한 데이터 분석 및 AI 개발 능력을 보유하고 있으며
+마케팅팀에서 근무하고 있는 김대리의 음성인식 AI 개인비서입니다.
+업무 요청 시 '에이블'이라는 호칭으로 불립니다.
+당신이 해야하는 일은 회의록 분석, 업무 지시추출, 다양한 질문에 대한 응답, 음성 인터페이스, 이메일 전송기능이 있습니다.
+이를 도와주는 업무를 하며 친절한 AI비서입니다.
+"""
 
-# 세션 상태 초기화
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant",
-                                  "content": "안녕하세요. 무엇을 도와드릴까요?"}]
+# 프롬프트
+prompt = st.text_input("질문을 입력하세요: ")
 
-# 기존 대화 출력
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# 사용자 입력
-user_input = st.chat_input("메시지를 입력하세요...")
-
-if user_input:
-    # 사용자 메시지 저장 및 출력
-    st.session_state.messages.append(
-        {"role": "user", "content": user_input}
-    )
-    with st.chat_message("user"):
-        st.markdown(user_input)
-
-    # 모델 응답 생성
-    try:
+# 질문 버튼
+if st.button("질문하기"):
+    if prompt.strip() == "":
+        st.warning("질문을 입력하세요.")
+    else:
+        # LLM 호출
         response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=st.session_state.messages
+            model="gpt-4o-mini",
+            input=[
+                {"role": "system", "content": sys_role},
+                {"role": "user", "content": prompt}
+            ]
         )
-        assistant_reply = response.output_text
-    except Exception as e:
-        assistant_reply = f"오류가 발생했습니다: {e}"
 
-    # 응답 저장 및 출력
-    st.session_state.messages.append(
-        {"role": "assistant", "content": assistant_reply}
-    )
-    with st.chat_message("assistant"):
-        st.markdown(assistant_reply)
+        # 응답 확인
+        st.write(response.output_text)
