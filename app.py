@@ -24,8 +24,9 @@ sys_role = """
 
 # 프롬프트
 prompt = st.text_input(
+    "질문",
     placeholder="질문을 입력하세요.",
-    
+    label_visibility="collapsed" #입력창 위의 라벨을 숨기고 빈 공간도 제거
 )
 
 # 질문 버튼
