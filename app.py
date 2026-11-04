@@ -2912,7 +2912,7 @@ def render_chat():
         with st.chat_message(
             item["role"],
             avatar=(
-                "✦"
+                "🤖"
                 if item["role"] == "assistant"
                 else "👤"
             )
@@ -3120,20 +3120,118 @@ def render_meeting():
         "회의 내용을 입력하거나 파일을 선택해 분석합니다."
     )
 
-    # 분석 자료 선택
-    available = [
-        d for d in S.uploaded_docs if d["text"]
-    ]
+
+    # 회의록 분석 페이지에서 직접 파일 업로드
+    uploaded = st.file_uploader(
+        "회의록 파일 업로드",
+        type=FILE_TYPES,
+        accept_multiple_files=True,
+        key="meeting_page_uploads",
+        help="PDF, TXT, MP3, M4A, MP4, DOCX, CSV, Excel, PPT 등을 업로드할 수 있습니다."
+    )
+
+    if "meeting_page_docs" not in S:
+        S.meeting_page_docs = []
+
+    if "meeting_page_upload_id" not in S:
+        S.meeting_page_upload_id = ""
+
+    # 동일 파일의 반복 변환 방지
+    if uploaded:
+
+        file_id = hashlib.sha256(
+            "|".join(
+                f"{f.name}:{hashlib.sha256(f.getvalue()).hexdigest()}"
+                for f in uploaded
+            ).encode("utf-8")
+        ).hexdigest()
+
+        if file_id != S.meeting_page_upload_id:
+
+            docs = []
+
+            with st.spinner("업로드한 파일을 읽고 있습니다..."):
+
+                for f in uploaded:
+                    try:
+                        text = extract_text(
+                            f.name,
+                            f.getvalue()
+                        ).strip()
+
+                        if not text:
+                            raise ValueError(
+                                "추출 가능한 텍스트가 없습니다. "
+                                "스캔 PDF는 OCR이 필요합니다."
+                            )
+
+                        docs.append({
+                            "name": f.name,
+                            "text": text
+                        })
+
+                    except Exception as exc:
+                        st.error(
+                            f"'{f.name}' 파일 처리 실패: {exc}"
+                        )
+
+            S.meeting_page_docs = docs
+            S.meeting_page_upload_id = file_id
+
+            # 새 파일 자동 선택
+            if docs:
+                S.meeting_source = (
+                    f"새 업로드 · {docs[0]['name']}"
+                )
+
+                st.success(
+                    f"{len(docs)}개 파일을 불러왔습니다."
+                )
+
+    elif S.meeting_page_upload_id:
+
+        # 업로드 목록을 비우면 파일 선택 초기화
+        S.meeting_page_docs = []
+        S.meeting_page_upload_id = ""
+
+        if str(
+            S.get("meeting_source", "")
+        ).startswith("새 업로드 · "):
+
+            S.meeting_source = "직접 입력"
+
+    # 기존 사이드바 파일 + 새 업로드 파일 통합
+    options = {
+        "직접 입력": None
+    }
+
+    for d in S.uploaded_docs:
+        if d.get("text"):
+            options[
+                f"사이드바 · {d['name']}"
+            ] = d
+
+    for d in S.meeting_page_docs:
+        options[
+            f"새 업로드 · {d['name']}"
+        ] = d
+
+    # 파일 선택 상태 유효성 확인
+    if S.get(
+        "meeting_source", "직접 입력"
+    ) not in options:
+
+        S.meeting_source = "직접 입력"
 
     source = st.selectbox(
         "분석할 자료",
-        ["직접 입력"] + [
-            d["name"] for d in available
-        ],
+        list(options),
         key="meeting_source"
     )
 
+    # 직접 입력 방식 유지
     if source == "직접 입력":
+
         raw = st.text_area(
             "회의 내용",
             value=S.meeting_text,
@@ -3141,14 +3239,15 @@ def render_meeting():
             placeholder="회의 내용을 붙여넣으세요."
         )
 
+    # 파일 선택 시 내용 불러오기
     else:
-        raw = next(
-            d["text"]
-            for d in available
-            if d["name"] == source
-        )
 
-        with st.expander("원문 미리보기"):
+        raw = options[source]["text"]
+
+        with st.expander(
+            "원문 미리보기",
+            expanded=True
+        ):
             st.text_area(
                 "문서 내용",
                 raw[:12000],
