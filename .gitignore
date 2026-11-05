@@ -1,6 +1,8 @@
-api_key.txt
+.env
+.env.*
+!.env.example
 .streamlit/secrets.toml
-*.db
-*.db-*
-*.log
+api_key.txt
 __pycache__/
+*.py[cod]
+.ipynb_checkpoints/
