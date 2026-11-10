@@ -38,7 +38,7 @@ def get_chain():
     h_msg = "{input}"
     messages = [("system", s_msg), ("human", h_msg)]
     prompt = ChatPromptTemplate.from_messages(messages)
-    llm = ChatOpenAI(model="gpt-4o-mini", streaming=True, temperature=0.1)
+    llm = ChatOpenAI(model="gpt-4o-mini", streaming=True, temperature=0.3)
     rag_chain = (
         {
             "context": itemgetter("input") | retriever | format_docs,
