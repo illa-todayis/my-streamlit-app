@@ -19,7 +19,7 @@ def get_chain():
 
     # 벡터 저장소
     vectorstore = Chroma(
-        collection_name="hr_rules",
+        collection_name="ai_ethics",
         embedding_function=embedding,
         persist_directory="chroma_db"
     )
@@ -30,14 +30,15 @@ def get_chain():
     # 체인 구성
     s_msg = """
     1. 반드시 제공된 문서 내용(context)에 근거하여 답변하세요.
-    2. 문서에 없는 내용은 추측하지 마세요.
+    2. 문서에 없는 내용은 추측하지 말고 "업로드된 문서에서 확인되지 않습니다."라고 답하세요.
     3. 답변은 간결하고 명확하게 작성하세요.
+    4. 대화를 시도하면 친절하게 답변해주세요. 
     [문서]
     {context}"""
     h_msg = "{input}"
     messages = [("system", s_msg), ("human", h_msg)]
     prompt = ChatPromptTemplate.from_messages(messages)
-    llm = ChatOpenAI(model="gpt-4o-mini", streaming=True, temperature=0.3)
+    llm = ChatOpenAI(model="gpt-4o-mini", streaming=True, temperature=0.1)
     rag_chain = (
         {
             "context": itemgetter("input") | retriever | format_docs,
@@ -54,7 +55,7 @@ chain = get_chain()
 
 # 페이지 설정
 st.set_page_config(page_title="RAG 챗봇", page_icon="🏢")
-st.title("🏢 인사규정 챗봇")
+st.title("🏢 생성형 AI 윤리 가이드 챗봇")
 
 # 세션 상태 초기화
 if "messages" not in st.session_state:
