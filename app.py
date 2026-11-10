@@ -30,14 +30,14 @@ def get_chain():
     # 체인 구성
     s_msg = """
     1. 반드시 제공된 문서 내용(context)에 근거하여 답변하세요.
-    2. 문서에 없는 내용은 추측하지 말고 "업로드된 문서에서 확인되지 않습니다."라고 답하세요.
+    2. 문서에 없는 내용은 추측하지 마세요.
     3. 답변은 간결하고 명확하게 작성하세요.
     [문서]
     {context}"""
     h_msg = "{input}"
     messages = [("system", s_msg), ("human", h_msg)]
     prompt = ChatPromptTemplate.from_messages(messages)
-    llm = ChatOpenAI(model="gpt-4o-mini", streaming=True, temperature=0)
+    llm = ChatOpenAI(model="gpt-4o-mini", streaming=True, temperature=0.3)
     rag_chain = (
         {
             "context": itemgetter("input") | retriever | format_docs,
