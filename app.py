@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""AIVLE School Learning Hub | 미션 3·4 기능·검색 개선판.
+"""AIVLE School Learning Hub | 미션 3·4 고도화.
 
 [핵심] 1일차 하이브리드 RAG(MMR+BM25 / Multi-Query / Sub-Query / 검증) 재사용.
-[추가] PDF/DOCX/PPTX/XLSX/TXT/MD/CSV 다중 업로드, 출처, 문장 검색, AI 추천 질문.
+[추가] PDF/DOCX/PPTX/XLSX/TXT/MD/CSV 업로드, 출처, 탐색 UI, AI 추천 질문.
 [배포] streamlit run app.py / OPENAI_API_KEY는 Streamlit Secrets에 설정.
 """
 import base64
@@ -11,12 +11,12 @@ import hashlib
 import io
 import json
 import os
-from st_copy import copy_button
 from pathlib import Path
 import re
 import tempfile
 from difflib import SequenceMatcher
-from html import unescape
+from html import unescape, escape
+from contextlib import contextmanager
 
 import streamlit as st
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -148,28 +148,6 @@ def source_label(doc):
     return label
 
 
-def document_topics(docs, limit=14):
-    """[탐색] 제목 후보를 문서에서 직접 추출 (AI가 지어내지 않음)."""
-    found, seen = [], set()
-    for doc in docs:
-        for line in doc.page_content.splitlines():
-            line = re.sub(r"[#*`>|]+", "", line).strip()
-            if not 5 <= len(line) <= 64:
-                continue
-            # 제목처럼 보이는 짧은 줄이나 번호가 있는 제목만 노출
-            is_heading = bool(re.match(r"^(?:PART\s*\d+|FAQ\s*\d+|\d{1,2}[.\-]\d*\s+|[가-힣A-Za-z ]{2,24}[:：])", line, re.I)) or (len(line) <= 22 and len(line.split()) <= 4 and not line.endswith((".", "다", ",", ";")))
-            if not is_heading:
-                continue
-            key = (doc.metadata.get("filename"), line)
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append({"title": line, "source": source_label(doc)})
-            if len(found) >= limit:
-                return found
-    return found
-
-# ===== [1일차 구현 재사용] 문서 포맷팅 및 중복 제거 유틸리티 =====
 def is_contents_excerpt(text):
     """목차 제목과 다수의 항목이 있는 발췌를 구분하는 보조 규칙."""
     clean = re.sub(r"[*#]", "", text).strip()
@@ -178,93 +156,43 @@ def is_contents_excerpt(text):
     )
 
 
-def search_sentences(text):
-    """Search display text is normalized into sentences, not arbitrary vector chunks."""
-    value = unescape(text)
-    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
-    value = re.sub(r"</?[^<>]+>", " ", value)
-    paragraphs, buffer = [], []
-    def flush():
-        if buffer:
-            paragraphs.append(" ".join(buffer).strip())
-            buffer.clear()
-
-    for raw_line in value.splitlines():
-        heading = bool(re.match(r"^\s{0,3}#{1,6}\s+", raw_line))
-        line = re.sub(r"^\s{0,3}#{1,6}\s+", "", raw_line).strip()
-        line = re.sub(r"(?<!\w)[*`]+(?!\w)", "", line)
-        line = re.sub(r"\s*\|\s*", " · ", line)
-        line = re.sub(r"\s+", " ", line).strip(" ·-\t")
-        if not line:
-            flush()
-            continue
-        if heading or re.match(r"^(?:PART\s*\d+|FAQ\s*\d+|[•◆]\s+)", line, re.I):
-            flush()
-            paragraphs.append(line)
-            continue
-        # A PDF's hard-wrapped lines can split sentences in the middle.
-        # Rejoin them before choosing an excerpt, but keep sentence boundaries.
-        if buffer and re.search(r"[.!?。]['\"”’)]?$", buffer[-1]):
-            flush()
-        buffer.append(line)
-        if re.search(r"[.!?。]['\"”’)]?$", line):
-            flush()
-    flush()
-    sentences = []
-    for paragraph in paragraphs:
-        pieces = re.split(r'(?<=[.!?。])\s+(?=[가-힣A-Za-z0-9“(])', paragraph)
-        sentences.extend(p.strip() for p in pieces if len(p.strip()) >= 4)
-    return sentences
-
-
 def find_in_whitepaper(index, keyword, limit=3):
-    """Top-3 matching natural sentences, preferring body passages over TOC."""
+    """띄어쓰기 차이와 가까운 표현을 보완하고 위치별 상위 3개만 반환합니다."""
     normalize = lambda value: "".join(c for c in value.casefold() if c.isalnum())
-    query = normalize(keyword.strip()).replace("포토폴리오", "포트폴리오")
+    query = normalize(keyword.strip())
     if not query:
         return []
-    terms = [normalize(term) for term in keyword.split() if len(normalize(term)) > 1]
+    # 자주 혼동하는 표기를 같은 검색어로 취급합니다.
+    query = query.replace("포토폴리오", "포트폴리오")
+    terms = [normalize(term) for term in keyword.split() if normalize(term)]
     best = {}
     for item in index:
-        raw_text = item["text"]
-        sentences = search_sentences(raw_text)
-        for i, sentence in enumerate(sentences):
-            compact = normalize(sentence)
-            exact = query in compact
-            all_terms = len(terms) > 1 and all(term in compact for term in terms)
-            similar = False
-            if exact:
-                score = 10
-            elif all_terms:
-                score = 6
-            elif len(query) >= 4:
-                similarity = max(
-                    (SequenceMatcher(None, query, normalize(match.group())).ratio()
-                     for match in re.finditer(r"[가-힣A-Za-z0-9]+", sentence)
-                     if abs(len(normalize(match.group())) - len(query)) <= 2),
-                    default=0,
-                )
-                if similarity < 0.84:
-                    continue
-                score, similar = similarity * 4, True
-            else:
-                continue
-            # Very short headings may need the following explanatory sentence.
-            excerpt = sentence
-            if len(excerpt) < 85 and i + 1 < len(sentences):
-                next_sentence = sentences[i+1]
-                if len(next_sentence) < 260:
-                    excerpt += " " + next_sentence
-            if len(excerpt) > 450:
-                excerpt = excerpt[:440].rsplit(" ", 1)[0] + "…"
-            is_toc = is_contents_excerpt(raw_text)
-            candidate = {"label": item["label"], "excerpt": excerpt,
-                         "contents": is_toc, "similar": similar, "score": score}
-            if item["label"] not in best or (is_toc, -score) < (
-                best[item["label"]]["contents"], -best[item["label"]]["score"]
-            ):
-                best[item["label"]] = candidate
-    return sorted(best.values(), key=lambda h: (h["contents"], -h["score"]))[:min(limit,3)]
+        text = clean_search_text(item["text"])
+        positions = [i for i, c in enumerate(text) if c.isalnum()]
+        compact = "".join(text[i].casefold() for i in positions)
+        at = compact.find(query)
+        score, similar = 0, False
+        if at >= 0:
+            at = positions[at]
+            score = 10 if keyword.casefold().strip() in text.casefold() else 8
+        elif len(terms) > 1 and all(term in compact for term in terms):
+            at = positions[compact.find(terms[0])]
+            score = 5
+        elif len(query) >= 4:
+            # 짧고 무관한 단어까지 확장하지 않도록 유사도 기준을 제한합니다.
+            matches = [(SequenceMatcher(None, query, normalize(m.group())).ratio(), m.start())
+                       for m in re.finditer(r"[가-힣A-Za-z0-9]+", text)
+                       if abs(len(normalize(m.group())) - len(query)) <= 2]
+            ratio, at = max(matches, default=(0, 0))
+            if ratio >= .8:
+                score, similar = ratio * 4, True
+        if not score:
+            continue
+        result = {"label": item["label"], "excerpt": sentence_at(text, at),
+                  "contents": is_contents_excerpt(text), "similar": similar, "score": score}
+        if item["label"] not in best or best[item["label"]]["score"] < score:
+            best[item["label"]] = result
+    return sorted(best.values(), key=lambda hit: (hit["contents"], -hit["score"]))[:min(limit, 3)]
 
 
 def clean_answer_markup(text):
@@ -277,6 +205,32 @@ def clean_answer_markup(text):
         value = re.sub(r"</?(?:u|span|div|p|b|strong|em|i|font|sup|sub)(?:\s[^<>]*?)?\s*/?>", "", value, flags=re.I)
         parts[i] = value
     return "".join(parts)
+
+
+def clean_search_text(text):
+    text = clean_answer_markup(text)
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
+    text = re.sub(r"\|[\s:|-]*\|", " ", text)
+    text = re.sub(r"[|*`]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def sentence_at(text, position):
+    """문자 수로 잘라 시작하지 않고 검색어를 포함한 문장을 표시합니다."""
+    for match in re.finditer(r"[^.!?。]+(?:[.!?。]+|$)", text):
+        if match.start() <= position < match.end():
+            sentence = match.group().strip()
+            if len(sentence) <= 500:
+                return sentence
+            # 문장 자체가 긴 표/목록이면 단어 경계에서만 줄여 생략을 표시합니다.
+            offset = max(0, position-match.start()-100)
+            start = sentence.rfind(" ", 0, offset) + 1 if offset else 0
+            end = sentence.find(" ", min(len(sentence), start+450))
+            end = len(sentence) if end < 0 else end
+            return ("… " if start else "") + sentence[start:end] + (" …" if end<len(sentence) else "")
+    return text.strip()
 
 
 # 문서 포맷터: PDF 페이지 출처 포함
@@ -353,10 +307,6 @@ def rag_pipeline(docs, persist_directory="chroma_db"):
     # chroma_db는 세션별 TemporaryDirectory 아래에 위치하여 사용자 간 섞이지 않습니다.
     # 다른 문서로 교체할 때만 이 컬렉션을 초기화하고 새 문서를 벡터화합니다.
     vectorstore.reset_collection()
-    # Identical excerpts from different files must not be treated as one item.
-    # EnsembleRetriever uses this ID instead of only page_content for RRF fusion.
-    for idx, chunk in enumerate(chunks):
-        chunk.metadata["chunk_id"] = f"{idx}:{hashlib.sha256((chunk.metadata.get('filename', '') + chunk.page_content).encode()).hexdigest()[:12]}"
     vectorstore.add_documents(chunks)
 
     mmr_retriever = vectorstore.as_retriever(
@@ -367,8 +317,21 @@ def rag_pipeline(docs, persist_directory="chroma_db"):
     bm25_retriever.k = 6
     retriever = EnsembleRetriever(
         retrievers=[mmr_retriever, bm25_retriever],
-        weights=[0.5, 0.5], id_key="chunk_id"
+        weights=[0.5, 0.5]
     )
+    file_retrievers = {}
+    for filename in dict.fromkeys(d.metadata["filename"] for d in chunks):
+        file_chunks = [d for d in chunks if d.metadata["filename"] == filename]
+        lexical = BM25Retriever.from_documents(file_chunks)
+        lexical.k = 3
+        semantic = vectorstore.as_retriever(
+            search_type="mmr", search_kwargs={"k":3, "fetch_k":12,
+                "lambda_mult":.7, "filter":{"filename":filename}}
+        )
+        file_retrievers[filename] = EnsembleRetriever(
+            retrievers=[semantic, lexical], weights=[.5,.5]
+        )
+
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
 
     # 개선 ①·②: 한 번의 LLM 호출에서 복잡도 판단, Multi-Query, Sub-Query 생성
@@ -447,7 +410,7 @@ def rag_pipeline(docs, persist_directory="chroma_db"):
             sub_queries = [question]
         return complexity, multi_queries, sub_queries
 
-    def multi_retrieve(question):
+    def multi_retrieve(question, filenames=None):
         complexity, multi_queries, sub_queries = generate_queries(question)
         # 원문을 먼저 검색하고, 이어서 Multi-Query / Sub-Query 검색
         queries = unique_queries([question] + multi_queries + sub_queries, 10)
@@ -458,8 +421,11 @@ def rag_pipeline(docs, persist_directory="chroma_db"):
         # 검색 결과 점수 통합 + 하위 질문별 검색 결과 별도 보관
         doc_map, scores = {}, {}
         results_by_query = {}
+        scope = [name for name in (filenames or file_retrievers) if name in file_retrievers]
+        single = file_retrievers[scope[0]] if len(scope)==1 and len(file_retrievers)>1 else retriever
         for qi, q in enumerate(queries):
-            found = retriever.invoke(q)
+            found = single.invoke(q)
+            found = [d for d in found if d.metadata.get("filename") in scope]
             results_by_query[q] = found
             for rank, doc in enumerate(found):
                 key = doc_key(doc)
@@ -469,6 +435,12 @@ def rag_pipeline(docs, persist_directory="chroma_db"):
 
         # 개선 ③: 각 Sub-Query 관련 문서 1개씩 먼저 확보
         selected = []
+        # 전체 검색에서도 작은 두 번째 파일의 후보가 빠지지 않도록 파일별 원문 질문 상위를 확보합니다.
+        if len(scope) > 1:
+            for name in scope:
+                candidates = file_retrievers[name].invoke(question)
+                if candidates:
+                    add_if_distinct(selected, candidates[0])
         for sub_q in sub_queries:
             for candidate in results_by_query.get(sub_q, []):
                 if add_if_distinct(selected, candidate):
@@ -482,42 +454,8 @@ def rag_pipeline(docs, persist_directory="chroma_db"):
                 break
             add_if_distinct(selected, doc_map[key])
 
-        # [복수 파일 보완] 결과가 한 파일에 치우치면 누락된 문서에서도
-        # 원본 질문과 가장 관련 높은 청크 1개를 검색해 근거 후보에 포함합니다.
-        # 질문과 무관한 내용이 답변 근거로 사용되지 않도록 시스템 메시지도 유지합니다.
-        sources = list(dict.fromkeys(chunk.metadata.get("filename") for chunk in chunks))
-        if len(sources) > 1:
-            present = {doc.metadata.get("filename") for doc in selected}
-            missing = [source for source in sources if source not in present]
-            if missing:
-                vector = embedding.embed_query(question)
-                for source in missing:
-                    candidates = vectorstore.similarity_search_by_vector(
-                        embedding=vector, k=2, filter={"filename": source}
-                    )
-                    for candidate in candidates:
-                        if any(overlap_ratio(candidate, old) >= 0.82 for old in selected):
-                            continue
-                        if len(selected) >= 10:
-                            # Drop only a redundant doc from a source already present.
-                            counts = {name: sum(d.metadata.get("filename") == name for d in selected)
-                                      for name in sources}
-                            drop = next((i for i in range(len(selected)-1, -1, -1)
-                                         if counts.get(selected[i].metadata.get("filename"), 0) > 1), None)
-                            if drop is None:
-                                break
-                            selected.pop(drop)
-                        selected.append(candidate)
-                        break
-        search_details = {
-            "original": question,
-            "complexity": complexity,
-            "multi_queries": multi_queries,
-            "sub_queries": sub_queries,
-            "used_files": list(dict.fromkeys(d.metadata.get("filename", "") for d in selected)),
-        }
-        print(f"[정확 중복 제거 후 {len(doc_map)}개 / 최종 선택 {len(selected)}개 / 검색 파일 {len(search_details['used_files'])}개]")
-        return selected, search_details
+        print(f"[정확 중복 제거 후 {len(doc_map)}개 / 최종 선택 {len(selected)}개]")
+        return selected
 
     s_msg = """당신은 업로드된 AIVLE School 학습 문서 기반 어시스턴트입니다.
 1. 제공된 문서(context)에서 확인한 사실만 근거로 답변하세요.
@@ -647,7 +585,7 @@ JSON만 반환: {{"evidence":[{{"id":0,"summary":"짧은 근거 요약","quote":
     def answer_with_verification(payload):
         question = payload["input"]
         # 검색은 1회만 진행하고 초안·검증·재생성에서 같은 문서를 사용
-        selected_docs, search_details = multi_retrieve(question)
+        selected_docs = multi_retrieve(question, payload.get("filenames"))
         context = format_docs(selected_docs)
         values = {"input": question, "context": context}
         answer = answer_chain.invoke(values)
@@ -670,34 +608,26 @@ JSON만 반환: {{"evidence":[{{"id":0,"summary":"짧은 근거 요약","quote":
 
         if passed:
             print("[답변 검증: 통과 / 재생성 0회]")
-            return {"answer": answer, "sources": build_source_cards(selected_docs, question, answer),
-                    "search_details": search_details}
+            return {"answer": answer, "sources": build_source_cards(selected_docs, question, answer)}
 
         print(f"[답변 검증: 실패 / 피드백: {feedback}]")
         revised = retry_chain.invoke({**values, "answer": answer, "feedback": feedback})
         print("[피드백 반영 답변 재생성: 1회 완료 / 추가 검증 없음]")
-        return {"answer": revised, "sources": build_source_cards(selected_docs, question, revised),
-                "search_details": search_details}
+        return {"answer": revised, "sources": build_source_cards(selected_docs, question, revised)}
 
     # [신규: PDF 자동 추천 질문] 이미 분할한 청크 중 문서 전체에서 골고루 샘플링합니다.
     # 별도 PDF 로더나 임베딩 호출 없이 질문 생성에 필요한 텍스트만 추립니다.
-    grouped_chunks = {}
-    for chunk in chunks:
-        grouped_chunks.setdefault(chunk.metadata.get("filename", "업로드 문서"), []).append(chunk)
-    sampled_chunks = []
-    filenames = list(grouped_chunks)
-    per_file = max(1, 12 // max(1, len(filenames)))
-    for filename in filenames:
-        file_chunks = grouped_chunks[filename]
-        amount = min(per_file, len(file_chunks))
-        indices = sorted({round(i * (len(file_chunks)-1) / max(1, amount-1))
-                          for i in range(amount)})
-        sampled_chunks.extend(file_chunks[i] for i in indices)
+    sample_indices = []
+    file_names = list(dict.fromkeys(d.metadata["filename"] for d in chunks))
+    per_file = max(1, 12 // len(file_names))
+    for filename in file_names:
+        indices = [i for i, d in enumerate(chunks) if d.metadata["filename"]==filename]
+        count = min(per_file, len(indices))
+        sample_indices.extend(indices[round(i*(len(indices)-1)/max(1,count-1))] for i in range(count))
     document_preview = "\n\n".join(
-        f"[자료 {i+1} / {source_label(doc)}] {doc.page_content[:850]}"
-        for i, doc in enumerate(sampled_chunks[:12])
+        f"[자료 {i+1} / {source_label(chunks[idx])}] {chunks[idx].page_content[:850]}"
+        for i, idx in enumerate(sample_indices)
     )
-
 
     # 기존 rag_chain.invoke({"input": ...}) 인터페이스 유지
     history_prompt = ChatPromptTemplate.from_messages([
@@ -727,15 +657,13 @@ JSON 객체만 출력하세요: question(검색 질문 문자열), clarification
                 if not isinstance(clarification, str) or not isinstance(standalone, str):
                     raise ValueError("질문 재작성 필드가 문자열이 아닙니다.")
                 if clarification.strip():
-                    return {"answer": clarification.strip(), "sources": [],
-                            "search_details": {"original": question, "multi_queries": [], "sub_queries": []}}
+                    return {"answer": clarification.strip(), "sources": []}
                 if not standalone.strip():
                     raise ValueError("검색 질문이 비어 있습니다.")
                 question = standalone.strip()
             except (ValueError, TypeError):
-                return {"answer": "어떤 대상과 조건을 말씀하시는지 조금 더 구체적으로 질문해 주세요.",
-                        "sources": [], "search_details": {"original": question, "multi_queries": [], "sub_queries": []}}
-        result = answer_with_verification({"input": question})
+                return {"answer": "어떤 대상과 조건을 말씀하시는지 조금 더 구체적으로 질문해 주세요.", "sources": []}
+        result = answer_with_verification({"input": question, "filenames": payload.get("filenames")})
         return {**result, "search_question": question}
 
     return RunnableLambda(answer_with_history), document_preview
@@ -837,12 +765,7 @@ button[kind="primary"]:hover,button[data-testid="stBaseButton-primary"]:hover,
     border:1px solid var(--hub-line); background:#fff; margin-bottom:.65rem; }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
     background:#eaf5f1; border-color:#d4e9df; }
-[data-testid="stChatMessageContent"] { min-width:0; overflow-wrap:break-word; word-break:keep-all; }
-[data-testid="stChatMessageContent"] p,
-[data-testid="stChatMessageContent"] li,
-[data-testid="stChatMessageContent"] .stMarkdown {word-break:keep-all !important;overflow-wrap:break-word !important;text-wrap:pretty;line-height:1.85;}
-/* Sentence-first search results avoid splitting Korean words at arbitrary characters. */
-[data-testid="stSidebar"] [data-testid="stText"] {word-break:keep-all;overflow-wrap:break-word;white-space:pre-wrap;}
+[data-testid="stChatMessageContent"] { min-width:0; overflow-wrap:anywhere; }
 [data-testid="stBottomBlockContainer"] { background:var(--hub-bg); }
 .hub-footer { color:var(--hub-muted); font-size:.78rem; text-align:center;
               padding:1rem .25rem; line-height:1.75; }
@@ -888,23 +811,8 @@ input::placeholder, textarea::placeholder {color:#657d7a !important; -webkit-tex
     display:flex;align-items:center;justify-content:center;min-height:108px;padding:1.2rem 1.4rem;text-align:center;}
 .st-key-recommendations .stButton > button[kind="secondary"] p {
     width:100%;text-align:center;font-size:1.07rem;line-height:1.7;}
-[data-testid="stChatMessageAvatarAssistant"] {
-    background:linear-gradient(135deg,#0fa99d 0%,#177bb1 56%,#786de2 100%);
-    border:1px solid #76d5cf;border-radius:14px;box-shadow:0 4px 14px rgba(13,117,137,.23);
-    padding:3px;overflow:hidden;}
-[data-testid="stChatMessageAvatarAssistant"] img {object-fit:contain;border-radius:10px;}
-[data-testid="stChatMessageAvatarUser"] {
-    background:#edf5f1;color:#117d78;border-radius:13px;border:1px solid #d2e8df;}
-@keyframes hubGlow {0%{opacity:.45;transform:scale(.8)}50%{opacity:1;transform:scale(1.08)}100%{opacity:.45;transform:scale(.8)}}
-.hub-loader {display:flex;align-items:center;gap:.7rem;border-radius:12px;
-    border:1px solid #bde6dc;background:linear-gradient(100deg,#eaf8f3,#f1faff);color:#08736c;
-    padding:1rem 1.1rem;font-weight:650;margin:.4rem 0;}
-.hub-loader-dot {width:11px;height:11px;border-radius:50%;background:#12a89d;
-    animation:hubGlow 1s ease-in-out infinite;flex:none;}
-.hub-loader-dot:nth-child(2) {animation-delay:.18s;background:#298fca;}
-.hub-loader-dot:nth-child(3) {animation-delay:.36s;background:#7367dd;}
-.hub-loader-message {margin-left:.4rem;word-break:keep-all;}
-
+[data-testid="stChatMessageAvatarAssistant"], [data-testid="stChatMessageAvatarUser"] {
+    background:#e5f3ef;color:#117d78;border-radius:50%;border:1px solid #cfe7df;}
 [data-testid="stChatMessage"] {padding:1.25rem 1.4rem;border-radius:18px;}
 .hub-loading {font-size:1.15rem;font-weight:650;color:#0c625e;background:#e6f4ef;
     border-left:4px solid #117d78;padding:1rem 1.2rem;border-radius:10px;margin:.5rem 0;}
@@ -912,6 +820,28 @@ input::placeholder, textarea::placeholder {color:#657d7a !important; -webkit-tex
     border-radius:12px;color:#0c625e;font-weight:600;}
 /* Evidence remains compact despite the larger general text size. */
 [data-testid="stText"] {font-size:.92rem;line-height:1.7;}
+
+
+/* Korean wraps between words, including recommendation cards and chat text. */
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li,
+[data-testid="stText"], .stButton button p {
+    word-break:keep-all !important;overflow-wrap:break-word !important;white-space:normal;}
+.st-key-recommendations button p {word-break:keep-all !important;overflow-wrap:break-word !important;}
+[data-testid="stChatMessageAvatarCustom"] {
+    background:linear-gradient(135deg,#0b8079,#73c9ad) !important;color:white !important;
+    border-radius:12px !important;box-shadow:0 4px 12px rgba(17,125,120,.18);border:0 !important;}
+.hub-copy-row {display:flex;justify-content:flex-end;margin-top:.4rem;}
+.hub-copy {border:1px solid #cfe5dd;background:#eff8f4;color:#0b625b;border-radius:10px;padding:.5rem .9rem;cursor:pointer;font:inherit;}
+.hub-copy:hover {background:#e0f2eb;}
+.hub-busy {position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;
+    background:rgba(242,249,246,.84);backdrop-filter:blur(3px);}
+.hub-busy-card {width:420px;max-width:85vw;padding:2rem;background:white;color:#203b39;text-align:center;
+    border:1px solid #c4e4d7;border-radius:24px;box-shadow:0 18px 60px rgba(17,95,80,.18);}
+.hub-busy-card strong {font-size:1.4rem;display:block;margin:1rem 0 .5rem;}
+.hub-busy-card p {font-size:1rem;line-height:1.8;word-break:keep-all;}
+.hub-busy-wheel {width:42px;height:42px;border:4px solid #dcefe6;border-top-color:#117d78;border-radius:50%;
+    margin:auto;animation:hub-spin .8s linear infinite;}
+@keyframes hub-spin {to{transform:rotate(360deg);}}
 
 </style>
 """, unsafe_allow_html=True)
@@ -935,13 +865,40 @@ for key, default in {
     "document_hash": None, "rag_chain": None, "temp_workspace": None,
     "suggested_questions": [], "suggestion_error": None,
     "document_preview": "", "messages": [], "recent_topics": [],
-    "doc_summaries": [], "doc_topics": [],
-    "question_pending": None, "app_mode": "탐색", "next_mode": None,
+    "doc_summaries": [],
+    "question_pending": None, "app_mode": "탐색", "next_mode": None, "active_file": "전체 자료",
     "learning_mode": "교육생", "recommendation_key": None, "view_mode": "home",
     "recommendation_context": "", "search_index": [],
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+@contextmanager
+def busy(title, detail):
+    placeholder = st.empty()
+    placeholder.markdown(
+        "<div class='hub-busy' role='status' aria-live='polite'><div class='hub-busy-card'>"
+        "<div class='hub-busy-wheel'></div><strong>" + escape(title) + "</strong><p>" + escape(detail) + "</p></div></div>",
+        unsafe_allow_html=True
+    )
+    try:
+        yield
+    finally:
+        placeholder.empty()
+
+
+def render_answer(answer, key):
+    answer = clean_answer_markup(answer)
+    with st.container(key=f"answer_{key}"):
+        st.markdown(answer)
+        button_id = "copy_" + hashlib.sha256(key.encode()).hexdigest()[:12]
+        st.html(
+            "<div class='hub-copy-row'><button id='" + button_id + "' class='hub-copy' data-copy='" + escape(answer, quote=True) + "'>답변 복사</button></div>"
+            + "<script>(()=>{const b=document.getElementById('" + button_id + "');"
+            + "if(b){b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='복사 완료';}catch(e){b.textContent='텍스트를 선택해서 복사해 주세요';}};}})();</script>",
+            unsafe_allow_javascript=True
+        )
 
 
 # UI용 함수: 검색 및 답변 생성 로직과 분리합니다.
@@ -954,7 +911,7 @@ def queue_question(question):
 def render_welcome(ready):
     with st.container(key="welcome"):
         st.markdown("<div class='hub-kicker'>AIVLE LEARNING COMPANION</div>", unsafe_allow_html=True)
-        st.markdown("<h1 class='hub-title'>에이블 생활, 궁금한 건 바로 물어봐! ✨</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 class='hub-title'>궁금한 순간,<br>함께 답을 찾아봐요.</h1>", unsafe_allow_html=True)
         description = (
             "교육 안내부터 선배의 학습 경험까지, 업로드한 자료에서 근거를 찾아드려요."
             if ready else
@@ -1001,22 +958,8 @@ def render_recommendations():
                 with st.expander("추천 질문 오류 확인"):
                     st.write(st.session_state.suggestion_error)
         if st.button("추천 질문 다시 생성", key="regenerate_questions", type="tertiary"):
-            with st.status("✨ 추천 질문을 새로 만들고 있어요...", expanded=True) as status:
-                st.markdown("<div class='hub-loader'><span class='hub-loader-dot'></span><span class='hub-loader-dot'></span><span class='hub-loader-dot'></span><span class='hub-loader-message'>백서와 최근 대화를 분석하고 있어요</span></div>", unsafe_allow_html=True)
-                try:
-                    recent_sources = st.session_state.messages[-1].get("sources", []) if st.session_state.messages else []
-                    preview = st.session_state.document_preview + "\n\n" + "\n".join(
-                        item.get("snippet", "") for item in recent_sources
-                    )
-                    st.session_state.suggested_questions = generate_suggested_questions(
-                        preview, st.session_state.learning_mode, st.session_state.recommendation_context
-                    )
-                    st.session_state.suggestion_error = None
-                    status.update(label="추천 질문 4개가 준비됐어요!", state="complete", expanded=False)
-                except Exception as exc:
-                    st.session_state.suggested_questions = []
-                    st.session_state.suggestion_error = str(exc)
-                    status.update(label="질문을 만드는 중 문제가 발생했어요.", state="error", expanded=False)
+            st.session_state.suggested_questions = []
+            st.session_state.suggestion_error = None
             st.rerun()
 
 
@@ -1061,7 +1004,7 @@ def render_sources(sources, key):
             st.caption(location)
             # 원문 발췌를 저장하고 Markdown 문법을 실행하지 않습니다.
             snippets = grouped[filename][location]
-            selected = [item for item in sources if item.get("snippet") in snippets]
+            selected = [item for item in sources if item.get("snippet") in snippets and str(item.get("label", "")).strip() == (filename if location=="위치 정보 없음" else filename+" · "+location)]
             summaries = list(dict.fromkeys(item.get("summary", "") for item in selected if item.get("summary")))
             if summaries:
                 st.caption("핵심 근거 요약")
@@ -1085,11 +1028,12 @@ def render_whitepaper_search(ready):
     with st.expander("백서 내 검색"):
         keyword = st.text_input("찾을 단어", placeholder="예: 지원 방법, SQLD", disabled=not ready, key="whitepaper_keyword")
         if keyword.strip() and ready:
-            hits = find_in_whitepaper(st.session_state.search_index, keyword)
-            st.caption(f"관련 문장 {len(hits)}개 · 원문 근거 우선")
+            hits = find_in_whitepaper([item for item in st.session_state.search_index
+                if st.session_state.active_file=="전체 자료" or item["filename"]==st.session_state.active_file], keyword)
+            st.caption(f"관련 문장 {len(hits)}곳 · 최대 3곳 · 본문 우선")
             for hit in hits:
                 st.caption(hit["label"] + (" · 유사 표현" if hit.get("similar") else ""))
-                st.markdown(hit["excerpt"].replace("<", "&lt;").replace(">", "&gt;"))
+                st.text(hit["excerpt"])
                 st.divider()
             if not hits:
                 st.info("관련 문구를 찾지 못했어요. 핵심 단어로 바꿔보세요. 예: 포트폴리오 → 프로젝트")
@@ -1104,6 +1048,8 @@ def render_document_sidebar(ready=True):
             st.success(f"학습 자료 {len(st.session_state.doc_summaries)}개 준비 완료")
         else:
             st.info("자료를 업로드하면 질문할 수 있어요.")
+        if ready:
+            st.selectbox("질문할 자료", ["전체 자료"] + [d["name"] for d in st.session_state.doc_summaries], key="active_file")
         render_whitepaper_search(ready)
         with st.expander("내 문서"):
             if ready:
@@ -1113,8 +1059,6 @@ def render_document_sidebar(ready=True):
                     st.divider()
             else:
                 st.caption("업로드한 파일이 여기에 표시됩니다.")
-        # '백서 탐색' 메뉴는 제거; 백서 내 검색 기능은 그대로 유지합니다.
-
         with st.expander("최근 질문"):
             recent = st.session_state.recent_topics[-5:] if ready else []
             for i, topic in enumerate(reversed(recent)):
@@ -1157,39 +1101,13 @@ def export_conversation(messages):
 
 def render_conversation():
     for index, message in enumerate(st.session_state.messages):
-        with st.chat_message(message["role"], avatar=LOGO_BYTES if message["role"] == "assistant" else ":material/person:"):
+        with st.chat_message(message["role"], avatar=":material/auto_awesome:" if message["role"] == "assistant" else ":material/person:"):
             st.caption("AIVLE 학습 도우미" if message["role"] == "assistant" else "나")
-            st.markdown(clean_answer_markup(message["content"]) if message["role"] == "assistant" else message["content"])
             if message["role"] == "assistant":
-                # 답변 본문 바로 아래에 복사 아이콘을 붙입니다 (별도 복사 박스 없음).
-                with st.container(horizontal=True, horizontal_alignment="right"):
-                    copy_button(message["content"], key=f"copy_answer_{index}",
-                                tooltip="답변 전체 복사", copied_label="복사 완료!")
-                details = message.get("search_details") or {}
-                if details or message.get("search_question"):
-                    with st.expander("검색에 사용한 질문 · 원문 / Multi-Query / Sub-Query"):
-                        st.caption("원본 질문")
-                        st.write(message.get("original_question", details.get("original", "")))
-                        rewritten = message.get("search_question")
-                        if rewritten and rewritten != message.get("original_question"):
-                            st.caption("대화 맥락을 반영한 검색 질문")
-                            st.write(rewritten)
-                        st.caption("Multi-Query (표현을 확장한 검색 질문)")
-                        if details.get("multi_queries"):
-                            for idx, query in enumerate(details["multi_queries"], 1):
-                                st.write(f"{idx}. {query}")
-                        else:
-                            st.caption("추가 검색어 없음")
-                        st.caption("Sub-Query (복합 질문을 나눈 검색 질문)")
-                        if details.get("sub_queries"):
-                            for idx, query in enumerate(details["sub_queries"], 1):
-                                st.write(f"{idx}. {query}")
-                        else:
-                            st.caption("추가 하위 질문 없음")
-                        if details.get("used_files"):
-                            st.caption("검색 근거로 선택된 파일: " + ", ".join(details["used_files"]))
+                render_answer(message["content"], key=f"message_{index}")
                 render_sources(message.get("sources", []), key=f"message_{index}")
             else:
+                st.markdown(message["content"])
                 with st.expander("질문 다시 작성"):
                     with st.form(f"edit_question_{index}", border=False):
                         edited = st.text_area("질문 수정", value=message["content"], key=f"edit_{index}_{hashlib.sha256(message['content'].encode()).hexdigest()[:12]}")
@@ -1217,25 +1135,20 @@ def render_conversation():
         st.markdown(question)
     failed = False
     result = {}
-    with st.chat_message("assistant", avatar=LOGO_BYTES):
-        with st.status("답변을 준비하고 있어요. 잠시만 기다려 주세요.", expanded=True) as status:
-            st.markdown("<div class='hub-loader'><span class='hub-loader-dot'></span><span class='hub-loader-dot'></span><span class='hub-loader-dot'></span><span class='hub-loader-message'>백서 검색 · 답변 작성 · 근거 검증 진행 중</span></div>", unsafe_allow_html=True)
-            st.write("최근 대화를 확인하고 문서를 검색한 뒤 답변을 검토합니다. 완료되면 자동으로 표시돼요.")
+    with st.chat_message("assistant", avatar=":material/auto_awesome:"):
+        with busy("답변 만드는 중", "자료에서 근거를 찾고 있어요. 이 창이 사라지면 답변이 도착해요."):
             try:
-                result = st.session_state.rag_chain.invoke({"input": question, "history": history})
+                scope = None if st.session_state.active_file=="전체 자료" else [st.session_state.active_file]
+                result = st.session_state.rag_chain.invoke({"input": question, "history": history, "filenames": scope})
                 answer, sources = clean_answer_markup(result["answer"]), result["sources"]
-                status.update(label="답변 준비가 완료됐어요.", state="complete", expanded=False)
             except Exception as exc:
                 answer, sources = f"응답 생성 중 오류: {type(exc).__name__}: {exc}", []
                 failed = True
                 st.session_state.messages[-1]["error"] = True
-                status.update(label="답변 생성에 실패했어요.", state="error", expanded=False)
         st.markdown(answer)
     st.session_state.messages.append({
         "role": "assistant", "content": answer, "sources": sources,
-        "original_question": question,
-        "search_question": result.get("search_question", ""),
-        "search_details": result.get("search_details", {}), "error": failed
+        "search_question": result.get("search_question", ""), "error": failed
     })
     if not failed:
         st.session_state.recommendation_context = "질문: " + question + "\n답변: " + answer[:1500]
@@ -1246,9 +1159,9 @@ def render_conversation():
 with st.sidebar:
     st.image(LOGO_BYTES, width=88)
     st.markdown("### AIVLE School")
-    st.caption("알쏭달쏭한 에이블 생활, 여기서 해결! ✨")
+    st.caption("에이블의 시작부터, 다음 도전까지.")
     st.selectbox("나의 이용 모드", ["일반", "지원자", "교육생", "취준생"], key="learning_mode")
-    st.caption("모드를 바꾸면 추천 질문도 달라져요.")
+    st.caption("내 상황에 맞춰, 다음 질문도 찰떡으로.")
     if st.button("홈으로", key="go_home", use_container_width=True, icon=":material/home:"):
         st.session_state.view_mode = "home"
         st.session_state.question_pending = None
@@ -1273,7 +1186,7 @@ with st.sidebar:
 
 with st.container(key="page_header"):
     st.markdown("### 학습 도우미")
-    st.caption("문서에서 찾은 근거로, 궁금한 내용을 함께 정리해요.")
+    st.caption("궁금한 건 가볍게, 근거는 확실하게.")
 
 if not files:
     render_document_sidebar(ready=False)
@@ -1294,7 +1207,7 @@ if not check_openai_key():
     st.stop()
 
 hash_input = hashlib.sha256()
-for f in sorted(files, key=lambda x: (x.name, hashlib.sha256(x.getvalue()).hexdigest())):
+for f in sorted(files, key=lambda x: x.name):
     hash_input.update(f.name.encode("utf-8"))
     hash_input.update(hashlib.sha256(f.getvalue()).digest())
 current_hash = hash_input.hexdigest()
@@ -1312,13 +1225,11 @@ if current_hash != st.session_state.document_hash or st.session_state.rag_chain 
             old.cleanup()
         except OSError:
             pass
-    with st.status("📚 학습 자료를 분석하고 있어요", expanded=True) as load_status:
-        st.markdown("<div class='hub-loader'><span class='hub-loader-dot'></span><span class='hub-loader-dot'></span><span class='hub-loader-dot'></span><span class='hub-loader-message'>모든 파일을 읽고 검색 인덱스를 만드는 중...</span></div>", unsafe_allow_html=True)
+    with busy("자료 읽는 중", "올려준 파일을 모두 확인하고 질문할 준비를 하고 있어요."):
         workspace = tempfile.TemporaryDirectory(prefix="aivle_hub_")
         try:
             docs, summaries = load_uploaded_documents(files, workspace.name)
             new_chain, preview = rag_pipeline(docs, str(Path(workspace.name) / "chroma_db"))
-            topics = document_topics(docs)
         except Exception as exc:
             workspace.cleanup()
             st.error(f"파일 처리에 실패했습니다: {type(exc).__name__}: {exc}")
@@ -1328,8 +1239,8 @@ if current_hash != st.session_state.document_hash or st.session_state.rag_chain 
         st.session_state.document_hash = current_hash
         st.session_state.document_preview = preview
         st.session_state.doc_summaries = summaries
-        st.session_state.doc_topics = topics
-        st.session_state.search_index = [{"label": source_label(doc), "text": doc.page_content} for doc in docs]
+        st.session_state.search_index = [{"label": source_label(doc), "filename":doc.metadata.get("filename"), "text": doc.page_content} for doc in docs]
+        st.session_state.active_file = "전체 자료"
         st.session_state.recommendation_context = ""
         st.session_state.recommendation_key = None
         st.session_state.suggested_questions = []
@@ -1338,21 +1249,23 @@ if current_hash != st.session_state.document_hash or st.session_state.rag_chain 
         st.session_state.view_mode = "home"
         st.session_state.recent_topics = []
         st.session_state.question_pending = None
-        load_status.update(label=f"학습 자료 {len(summaries)}개 분석 완료!", state="complete", expanded=False)
     st.toast("새 학습 자료의 분석이 완료되었습니다.", icon="✅")
 
 # 문서·모드·최근 대화가 바뀔 때만 추천을 갱신합니다. 검색창/근거 조작은 재생성하지 않습니다.
-recommendation_key = (current_hash, st.session_state.learning_mode, st.session_state.recommendation_context)
+recommendation_key = (current_hash, st.session_state.learning_mode, st.session_state.recommendation_context, st.session_state.active_file)
 if st.session_state.recommendation_key != recommendation_key:
     st.session_state.suggested_questions = []
     st.session_state.suggestion_error = None
     st.session_state.recommendation_key = recommendation_key
 if not st.session_state.question_pending and not st.session_state.suggested_questions and st.session_state.suggestion_error is None:
-    with st.spinner("모드와 최근 대화에 맞는 추천 질문을 준비하고 있어요..."):
+    with busy("다음 질문 고르는 중", "지금 대화와 모드에 맞는 질문을 새로 준비하고 있어요."):
         try:
             recent_sources = st.session_state.messages[-1].get("sources", []) if st.session_state.messages else []
-            preview = st.session_state.document_preview + "\n\n" + "\n".join(
-                item.get("snippet", "") for item in recent_sources
+            base_preview = st.session_state.document_preview if st.session_state.active_file=="전체 자료" else "\n\n".join(
+                item["text"][:1200] for item in st.session_state.search_index if item["filename"]==st.session_state.active_file
+            )[:12000]
+            preview = base_preview + "\n\n" + "\n".join(
+                item.get("snippet", "") for item in recent_sources if st.session_state.active_file=="전체 자료" or item.get("label", "").startswith(st.session_state.active_file)
             )
             st.session_state.suggested_questions = generate_suggested_questions(
                 preview, st.session_state.learning_mode, st.session_state.recommendation_context
