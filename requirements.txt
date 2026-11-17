@@ -1,4 +1,5 @@
 streamlit==1.64.0
+st-copy==2.0.0
 langchain-core==1.6.3
 langchain-openai==1.6.2
 langchain-text-splitters==1.1.2
