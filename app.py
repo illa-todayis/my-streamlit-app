@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from difflib import SequenceMatcher
+from html import unescape
 
 import streamlit as st
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -175,27 +177,55 @@ def is_contents_excerpt(text):
     )
 
 
-def find_in_whitepaper(index, keyword, limit=20):
-    """업로드한 원문에서 단어를 직접 찾습니다. API 호출 없음."""
-    needle = keyword.strip().casefold()
-    if not needle:
+def find_in_whitepaper(index, keyword, limit=3):
+    """띄어쓰기 차이와 가까운 표현을 보완하고 위치별 상위 3개만 반환합니다."""
+    normalize = lambda value: "".join(c for c in value.casefold() if c.isalnum())
+    query = normalize(keyword.strip())
+    if not query:
         return []
-    hits = []
+    # 자주 혼동하는 표기를 같은 검색어로 취급합니다.
+    query = query.replace("포토폴리오", "포트폴리오")
+    terms = [normalize(term) for term in keyword.split() if normalize(term)]
+    best = {}
     for item in index:
         text = item["text"]
-        begin = 0
-        while len(hits) < 200:
-            match = re.search(re.escape(keyword.strip()), text[begin:], re.I)
-            if match is None:
-                break
-            at = begin + match.start()
-            hits.append({"label": item["label"],
-                         "excerpt": text[max(0, at-70):at+len(keyword.strip())+150],
-                         "contents": is_contents_excerpt(text)})
-            begin = at + max(1, len(match.group()))
-        if len(hits) >= 200:
-            break
-    return sorted(hits, key=lambda hit: hit["contents"])[:limit]
+        positions = [i for i, c in enumerate(text) if c.isalnum()]
+        compact = "".join(text[i].casefold() for i in positions)
+        at = compact.find(query)
+        score, similar = 0, False
+        if at >= 0:
+            at = positions[at]
+            score = 10 if keyword.casefold().strip() in text.casefold() else 8
+        elif len(terms) > 1 and all(term in compact for term in terms):
+            at = positions[compact.find(terms[0])]
+            score = 5
+        elif len(query) >= 4:
+            # 짧고 무관한 단어까지 확장하지 않도록 유사도 기준을 제한합니다.
+            matches = [(SequenceMatcher(None, query, normalize(m.group())).ratio(), m.start())
+                       for m in re.finditer(r"[가-힣A-Za-z0-9]+", text)
+                       if abs(len(normalize(m.group())) - len(query)) <= 2]
+            ratio, at = max(matches, default=(0, 0))
+            if ratio >= .8:
+                score, similar = ratio * 4, True
+        if not score:
+            continue
+        result = {"label": item["label"], "excerpt": text[max(0, at-70):at+len(keyword)+180],
+                  "contents": is_contents_excerpt(text), "similar": similar, "score": score}
+        if item["label"] not in best or best[item["label"]]["score"] < score:
+            best[item["label"]] = result
+    return sorted(best.values(), key=lambda hit: (hit["contents"], -hit["score"]))[:min(limit, 3)]
+
+
+def clean_answer_markup(text):
+    """모델 응답의 HTML 서식을 정리하고 정상 Markdown 링크와 코드 블록은 유지합니다."""
+    parts = re.split(r"(```.*?```)", text, flags=re.S)
+    for i in range(0, len(parts), 2):
+        value = unescape(parts[i])
+        value = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
+        value = re.sub(r"<a\b[^>]*>(.*?)</a\s*>", r"\1", value, flags=re.I|re.S)
+        value = re.sub(r"</?(?:u|span|div|p|b|strong|em|i|font|sup|sub)(?:\s[^<>]*?)?\s*/?>", "", value, flags=re.I)
+        parts[i] = value
+    return "".join(parts)
 
 
 # 문서 포맷터: PDF 페이지 출처 포함
@@ -615,6 +645,7 @@ def generate_suggested_questions(document_preview, mode="교육생", discussion=
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 업로드 문서 학습 도우미의 추천 질문 생성자입니다.
 제공된 문서 발췌 내용만 바탕으로 현재 모드에 맞는 질문을 정확히 4개 작성하세요.
+일반: 문서 전반의 주요 내용을 폭넓게 탐색.
 지원자: 지원 방법, 자격, 선발, 교육 개요. 교육생: 학습, 출결, 프로젝트, 교육 지원.
 취준생: 직무 이해, 경험 정리, 포트폴리오, 취업 준비.
 최근 대화가 있으면 같은 주제를 더 구체화하는 후속 질문을 우선하세요.
@@ -741,6 +772,24 @@ input::placeholder, textarea::placeholder {color:#657d7a !important; -webkit-tex
 .st-key-recommendations .stButton > button:hover {background:#e8f5f1;}
 .st-key-recommendations .stButton > button[kind="tertiary"] {min-height:32px;background:transparent;border:none;box-shadow:none;padding:.3rem .5rem;}
 
+
+/* Desktop readability and vertically/horizontally centered question cards. */
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {font-size:1rem;line-height:1.85;}
+[data-testid="stCaptionContainer"] p {font-size:.91rem;line-height:1.7;}
+.st-key-recommendations .stButton > button[kind="secondary"] {
+    display:flex;align-items:center;justify-content:center;min-height:108px;padding:1.2rem 1.4rem;text-align:center;}
+.st-key-recommendations .stButton > button[kind="secondary"] p {
+    width:100%;text-align:center;font-size:1.07rem;line-height:1.7;}
+[data-testid="stChatMessageAvatarAssistant"], [data-testid="stChatMessageAvatarUser"] {
+    background:#e5f3ef;color:#117d78;border-radius:50%;border:1px solid #cfe7df;}
+[data-testid="stChatMessage"] {padding:1.25rem 1.4rem;border-radius:18px;}
+.hub-loading {font-size:1.15rem;font-weight:650;color:#0c625e;background:#e6f4ef;
+    border-left:4px solid #117d78;padding:1rem 1.2rem;border-radius:10px;margin:.5rem 0;}
+[data-testid="stSpinner"] {padding:.9rem 1.1rem;background:#e6f4ef;border:1px solid #c9e4dc;
+    border-radius:12px;color:#0c625e;font-weight:600;}
+/* Evidence remains compact despite the larger general text size. */
+[data-testid="stText"] {font-size:.92rem;line-height:1.7;}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -765,7 +814,7 @@ for key, default in {
     "document_preview": "", "messages": [], "recent_topics": [],
     "doc_summaries": [], "doc_topics": [],
     "question_pending": None, "app_mode": "탐색", "next_mode": None,
-    "learning_mode": "교육생", "recommendation_key": None,
+    "learning_mode": "교육생", "recommendation_key": None, "view_mode": "home",
     "recommendation_context": "", "search_index": [],
 }.items():
     if key not in st.session_state:
@@ -775,6 +824,7 @@ for key, default in {
 # UI용 함수: 검색 및 답변 생성 로직과 분리합니다.
 def queue_question(question):
     st.session_state.question_pending = question
+    st.session_state.view_mode = "chat"
     st.rerun()
 
 
@@ -899,13 +949,13 @@ def render_whitepaper_search(ready):
         keyword = st.text_input("찾을 단어", placeholder="예: 지원 방법, SQLD", disabled=not ready, key="whitepaper_keyword")
         if keyword.strip() and ready:
             hits = find_in_whitepaper(st.session_state.search_index, keyword)
-            st.caption(f"일치한 위치 {len(hits)}개 표시 · 최대 20개 · 본문 우선")
+            st.caption(f"관련 위치 {len(hits)}개 표시 · 최대 3개 · 본문 우선")
             for hit in hits:
-                st.caption(hit["label"])
+                st.caption(hit["label"] + (" · 유사 표현" if hit.get("similar") else ""))
                 st.text(hit["excerpt"])
                 st.divider()
             if not hits:
-                st.info("일치하는 문구가 없어요. 단어를 짧게 바꿔보세요.")
+                st.info("관련 문구를 찾지 못했어요. 핵심 단어로 바꿔보세요. 예: 포트폴리오 → 프로젝트")
         else:
             st.caption("Ctrl+F처럼 업로드 자료의 원문에서 찾습니다. AI 답변을 생성하지 않아요.")
 
@@ -955,6 +1005,7 @@ def render_document_sidebar(ready=True):
             disabled=not ready or not bool(st.session_state.messages)
         ):
             st.session_state.messages = []
+            st.session_state.view_mode = "home"
             st.session_state.recent_topics = []
             st.session_state.question_pending = None
             st.session_state.recommendation_context = ""
@@ -976,8 +1027,9 @@ def export_conversation(messages):
 
 def render_conversation():
     for index, message in enumerate(st.session_state.messages):
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        with st.chat_message(message["role"], avatar=LOGO_BYTES if message["role"] == "assistant" else ":material/person:"):
+            st.caption("AIVLE 학습 도우미" if message["role"] == "assistant" else "나")
+            st.markdown(clean_answer_markup(message["content"]) if message["role"] == "assistant" else message["content"])
             if message["role"] == "assistant":
                 with st.expander("답변 복사"):
                     st.caption("아래 오른쪽 위 복사 버튼을 누르세요.")
@@ -1001,6 +1053,7 @@ def render_conversation():
 
     st.session_state.question_pending = None
     question = question.strip()
+    st.session_state.view_mode = "chat"
     # 현재 질문을 추가하기 전에 완료된 최근 대화만 전달합니다.
     history = [
         {"role": m["role"], "content": m["content"]}
@@ -1009,16 +1062,17 @@ def render_conversation():
     st.session_state.messages.append({"role": "user", "content": question})
     if question not in st.session_state.recent_topics:
         st.session_state.recent_topics.append(question)
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=":material/person:"):
         st.markdown(question)
     failed = False
     result = {}
-    with st.chat_message("assistant"):
-        with st.status("질문을 확인하고 답변을 준비하고 있어요...", expanded=True) as status:
-            st.write("최근 대화 확인 → 문서 검색 → 답변 생성 및 검증")
+    with st.chat_message("assistant", avatar=LOGO_BYTES):
+        with st.status("답변을 준비하고 있어요. 잠시만 기다려 주세요.", expanded=True) as status:
+            st.markdown("<div class='hub-loading'>백서에서 근거를 찾고 있어요</div>", unsafe_allow_html=True)
+            st.write("최근 대화를 확인하고 문서를 검색한 뒤 답변을 검토합니다. 완료되면 자동으로 표시돼요.")
             try:
                 result = st.session_state.rag_chain.invoke({"input": question, "history": history})
-                answer, sources = result["answer"], result["sources"]
+                answer, sources = clean_answer_markup(result["answer"]), result["sources"]
                 status.update(label="답변 준비가 완료됐어요.", state="complete", expanded=False)
             except Exception as exc:
                 answer, sources = f"응답 생성 중 오류: {type(exc).__name__}: {exc}", []
@@ -1040,8 +1094,16 @@ with st.sidebar:
     st.image(LOGO_BYTES, width=88)
     st.markdown("### AIVLE School")
     st.caption("백서와 함께하는 학습 여정")
-    st.selectbox("나의 이용 모드", ["지원자", "교육생", "취준생"], key="learning_mode")
-    st.caption("모드는 추천 질문에 적용돼요. 검색 기준과 공식 규정은 동일합니다.")
+    st.selectbox("나의 이용 모드", ["일반", "지원자", "교육생", "취준생"], key="learning_mode")
+    st.caption("모드는 추천 질문에 적용돼요.\n\n검색 기준과 공식 규정은 동일합니다.")
+    if st.button("홈으로", key="go_home", use_container_width=True, icon=":material/home:"):
+        st.session_state.view_mode = "home"
+        st.session_state.question_pending = None
+        st.rerun()
+    if st.session_state.messages and st.session_state.view_mode == "home":
+        if st.button("대화 이어보기", key="resume_chat", use_container_width=True, icon=":material/chat:"):
+            st.session_state.view_mode = "chat"
+            st.rerun()
     st.divider()
     st.markdown("#### 학습 자료")
     files = st.file_uploader(
@@ -1119,6 +1181,7 @@ if current_hash != st.session_state.document_hash or st.session_state.rag_chain 
         st.session_state.suggested_questions = []
         st.session_state.suggestion_error = None
         st.session_state.messages = []
+        st.session_state.view_mode = "home"
         st.session_state.recent_topics = []
         st.session_state.question_pending = None
     st.toast("새 학습 자료의 분석이 완료되었습니다.", icon="✅")
@@ -1146,7 +1209,7 @@ if not st.session_state.question_pending and not st.session_state.suggested_ques
 # 시작 화면은 질문 입력, 대화가 시작되면 답변과 참고 자료에 집중합니다.
 render_document_sidebar(ready=True)
 
-if not st.session_state.messages and not st.session_state.question_pending:
+if (st.session_state.view_mode == "home" or not st.session_state.messages) and not st.session_state.question_pending:
     render_welcome(ready=True)
     render_question_form(ready=True)
     render_recommendations()
