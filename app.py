@@ -1060,7 +1060,7 @@ def render_document_sidebar(ready=True):
             else:
                 st.caption("업로드한 파일이 여기에 표시됩니다.")
         with st.expander("최근 질문"):
-            recent = st.session_state.recent_topics[-5:] if ready else []
+            recent = st.session_state.recent_topics[-1:] if ready else []
             for i, topic in enumerate(reversed(recent)):
                 if st.button(topic, key=f"recent_{i}", use_container_width=True):
                     queue_question(topic)
@@ -1129,8 +1129,7 @@ def render_conversation():
         for m in st.session_state.messages if not m.get("error")
     ][-6:]
     st.session_state.messages.append({"role": "user", "content": question})
-    if question not in st.session_state.recent_topics:
-        st.session_state.recent_topics.append(question)
+    st.session_state.recent_topics = [question]
     with st.chat_message("user", avatar=":material/person:"):
         st.markdown(question)
     failed = False
@@ -1161,7 +1160,7 @@ with st.sidebar:
     st.markdown("### AIVLE School")
     st.caption("에이블의 시작부터, 다음 도전까지.")
     st.selectbox("나의 이용 모드", ["일반", "지원자", "교육생", "취준생"], key="learning_mode")
-    st.caption("내 상황에 맞춰, 다음 질문도 찰떡으로.")
+    st.caption("선택한 모드에 맞는 질문을 추천합니다.")
     if st.button("홈으로", key="go_home", use_container_width=True, icon=":material/home:"):
         st.session_state.view_mode = "home"
         st.session_state.question_pending = None
