@@ -5,13 +5,11 @@ langchain-text-splitters==1.1.2
 langchain-chroma==1.1.0
 chromadb==1.5.9
 langchain-pymupdf4llm==1.28.0
-
-#1일차 고도화 파이프라인에서 활용한 하이브리드 검색 의존성
+# 1일차 고도화 파이프라인에서 활용한 하이브리드 검색 의존성
 langchain-community>=0.4,<1.0
 langchain-classic>=1.0,<2.0
 rank-bm25>=0.2.2,<1.0
-
-#[추가] PDF 외 학습 자료를 처리하는 라이브러리
+# [추가] PDF 외 학습 자료를 처리하는 라이브러리
 python-docx>=1.1,<2.0
 python-pptx>=1.0,<2.0
 openpyxl>=3.1,<4.0

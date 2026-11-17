@@ -481,7 +481,43 @@ def rag_pipeline(docs, persist_directory="chroma_db"):
     )
 
     # 기존 rag_chain.invoke({"input": ...}) 인터페이스 유지
-    return RunnableLambda(answer_with_verification), document_preview
+    history_prompt = ChatPromptTemplate.from_messages([
+        ("system", """현재 질문을 최근 대화에 비추어 독립적인 검색 질문으로 정리하세요.
+대화는 지칭 대상과 사용자가 제시한 조건을 파악하는 용도입니다. 이전 답변을 사실 근거로 삼지 마세요.
+새 주제의 질문이면 그대로 유지하세요. 현재 질문에 없는 숫자·기간·규정을 추측하지 마세요.
+대상이 모호해 검색할 수 없으면 clarification에 되물을 질문을 쓰세요.
+JSON 객체만 출력하세요: question(검색 질문 문자열), clarification(되물을 질문 또는 빈 문자열)."""),
+        ("human", "최근 대화:\n{history}\n현재 질문: {input}")
+    ])
+    history_chain = history_prompt | llm | StrOutputParser()
+
+    def answer_with_history(payload):
+        question = payload["input"]
+        history = payload.get("history", [])[-6:]
+        if history:
+            history_text = "\n".join(
+                f"{m['role']}: {m['content']}" for m in history
+            )
+            raw = history_chain.invoke({"input": question, "history": history_text})
+            try:
+                rewritten = json.loads(remove_json_fences(raw))
+                if not isinstance(rewritten, dict):
+                    raise ValueError("질문 재작성 결과가 객체가 아닙니다.")
+                clarification = rewritten.get("clarification", "")
+                standalone = rewritten.get("question", "")
+                if not isinstance(clarification, str) or not isinstance(standalone, str):
+                    raise ValueError("질문 재작성 필드가 문자열이 아닙니다.")
+                if clarification.strip():
+                    return {"answer": clarification.strip(), "sources": []}
+                if not standalone.strip():
+                    raise ValueError("검색 질문이 비어 있습니다.")
+                question = standalone.strip()
+            except (ValueError, TypeError):
+                return {"answer": "어떤 대상과 조건을 말씀하시는지 조금 더 구체적으로 질문해 주세요.", "sources": []}
+        result = answer_with_verification({"input": question})
+        return {**result, "search_question": question}
+
+    return RunnableLambda(answer_with_history), document_preview
 
 
 def generate_suggested_questions(document_preview):
@@ -578,6 +614,28 @@ button[kind="primary"]:hover,button[data-testid="stBaseButton-primary"]:hover,
 [data-testid="stBottomBlockContainer"] { background:var(--hub-bg); }
 .hub-footer { color:var(--hub-muted); font-size:.78rem; text-align:center;
               padding:1rem .25rem; line-height:1.75; }
+
+
+/* Native widgets also stay light when a browser retains a dark preference. */
+[data-testid="stFileUploaderDropzone"],
+[data-testid="stFileUploaderDropzone"] button,
+[data-baseweb="input"], [data-baseweb="base-input"],
+[data-baseweb="textarea"], [data-testid="stChatInput"],
+[data-testid="stChatInput"] textarea,
+[data-baseweb="select"] > div,
+[data-baseweb="popover"] > div, [role="listbox"], [role="option"] {
+    background-color:#f3f7f6 !important; color:#203b39 !important;
+    color-scheme:light !important;
+}
+[data-testid="stFileUploader"] small,
+[data-testid="stFileUploader"] label,
+[data-testid="stFileUploaderDropzone"] p,
+[data-testid="stFileUploaderDropzone"] span,
+[data-testid="stWidgetLabel"] p,
+input, textarea {color:#203b39 !important; -webkit-text-fill-color:#203b39 !important;}
+input:disabled, textarea:disabled {opacity:1; -webkit-text-fill-color:#657d7a !important;}
+input::placeholder, textarea::placeholder {color:#657d7a !important; -webkit-text-fill-color:#657d7a !important;}
+[data-testid="stCode"], [data-testid="stCode"] pre {background:#f3f7f6 !important;color:#203b39 !important;}
 
 </style>
 """, unsafe_allow_html=True)
@@ -764,14 +822,33 @@ def render_document_sidebar(ready=True):
             if not recent:
                 st.caption("질문을 시작하면 최근 항목을 다시 볼 수 있어요.")
         st.divider()
+        st.download_button(
+            "대화 내려받기 (TXT)",
+            data=export_conversation(st.session_state.messages) if ready else "",
+            file_name="AIVLE_대화기록.txt", mime="text/plain; charset=utf-8",
+            disabled=not ready or not bool(st.session_state.messages),
+            use_container_width=True, on_click="ignore"
+        )
         if st.button(
             "대화 내용 삭제", key="clear_conversation", use_container_width=True,
             disabled=not ready or not bool(st.session_state.messages)
         ):
             st.session_state.messages = []
             st.session_state.recent_topics = []
+            st.session_state.question_pending = None
             st.rerun()
         st.caption("대화만 삭제하고 업로드한 자료는 유지해요.")
+
+
+def export_conversation(messages):
+    lines = ["AIVLE School 학습 도우미 대화 기록", ""]
+    for message in messages:
+        role = "질문" if message["role"] == "user" else "답변"
+        lines.extend([f"[{role}]", message["content"]])
+        for source in message.get("sources", []):
+            lines.extend(["출처: " + source["label"], source.get("snippet", "")])
+        lines.append("")
+    return "\n".join(lines)
 
 
 def render_conversation():
@@ -779,30 +856,57 @@ def render_conversation():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message["role"] == "assistant":
+                with st.expander("답변 복사"):
+                    st.caption("아래 오른쪽 위 복사 버튼을 누르세요.")
+                    st.code(message["content"], language=None, wrap_lines=True)
+                if message.get("search_question"):
+                    with st.expander("검색에 사용한 질문"):
+                        st.write(message["search_question"])
                 render_sources(message.get("sources", []), key=f"message_{index}")
+            else:
+                with st.expander("질문 다시 작성"):
+                    with st.form(f"edit_question_{index}", border=False):
+                        edited = st.text_area("질문 수정", value=message["content"], key=f"edit_{index}_{hashlib.sha256(message['content'].encode()).hexdigest()[:12]}")
+                        send = st.form_submit_button("수정한 질문 보내기")
+                    if send and edited.strip():
+                        queue_question(edited.strip())
 
-    direct = st.chat_input("학습 자료에 대해 질문해 보세요")
+    direct = st.chat_input("이전 질문에 이어서 물어보셔도 좋아요")
     question = st.session_state.question_pending or direct
     if not question or not question.strip():
         return
 
     st.session_state.question_pending = None
     question = question.strip()
+    # 현재 질문을 추가하기 전에 완료된 최근 대화만 전달합니다.
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages if not m.get("error")
+    ][-6:]
     st.session_state.messages.append({"role": "user", "content": question})
     if question not in st.session_state.recent_topics:
         st.session_state.recent_topics.append(question)
     with st.chat_message("user"):
         st.markdown(question)
+    failed = False
+    result = {}
     with st.chat_message("assistant"):
-        with st.spinner("자료에서 근거를 찾고 답변을 확인하고 있어요..."):
+        with st.status("질문을 확인하고 답변을 준비하고 있어요...", expanded=True) as status:
+            st.write("최근 대화 확인 → 문서 검색 → 답변 생성 및 검증")
             try:
-                result = st.session_state.rag_chain.invoke({"input": question})
+                result = st.session_state.rag_chain.invoke({"input": question, "history": history})
                 answer, sources = result["answer"], result["sources"]
+                status.update(label="답변 준비가 완료됐어요.", state="complete", expanded=False)
             except Exception as exc:
                 answer, sources = f"응답 생성 중 오류: {type(exc).__name__}: {exc}", []
+                failed = True
+                st.session_state.messages[-1]["error"] = True
+                status.update(label="답변 생성에 실패했어요.", state="error", expanded=False)
         st.markdown(answer)
-    st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
-    # 추천 질문/문서 항목에서 시작해도 다음 화면은 바로 대화 상태로 전환합니다.
+    st.session_state.messages.append({
+        "role": "assistant", "content": answer, "sources": sources,
+        "search_question": result.get("search_question", ""), "error": failed
+    })
     st.rerun()
 
 
@@ -852,6 +956,8 @@ for f in sorted(files, key=lambda x: x.name):
     hash_input.update(hashlib.sha256(f.getvalue()).digest())
 current_hash = hash_input.hexdigest()
 if current_hash != st.session_state.document_hash or st.session_state.rag_chain is None:
+    if st.session_state.document_hash is not None and current_hash != st.session_state.document_hash:
+        st.warning("자료가 변경되어 이전 대화가 초기화됩니다. 새 자료를 기준으로 답변해요.")
     # [조원 개선 ②] 최초 업로드 또는 파일 내용 변경시에만 이 분기로 진입합니다.
     # 동일 문서에 대해 '질문하기'를 누르는 것은 벡터화를 재실행하지 않습니다.
     # [개선] 이전 문서 세트와 메모리 상태 정리 (다른 파일 내용이 섞이지 않음).
